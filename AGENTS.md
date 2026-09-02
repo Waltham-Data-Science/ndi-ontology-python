@@ -106,6 +106,10 @@ reaches live ontology APIs, so it is a separate CI job. Run it before changing a
 NDI_ONTOLOGY_MATLAB_DIR=/path/to/ndi-ontology-matlab pytest tests/test_shared_cases.py -v -rs
 ```
 
+CI additionally sets `NDI_ONTOLOGY_REQUIRE_LIVE=1`, so an unreachable API fails the job instead
+of skipping every case and passing. Do not unset it to get a green run — a job that skipped the
+parity cases has checked nothing, which is the one outcome worse than a red one.
+
 A case that fails there is a **port defect** until you have read the MATLAB source and
 established otherwise. Known divergences are `xfail(strict=True)` with a reason naming the
 MATLAB file and line — strict, so a fixed one turns CI red until its marker is removed. Do not

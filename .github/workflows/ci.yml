@@ -135,4 +135,8 @@ jobs:
       - name: Run ndi-ontology-matlab's case table against the port
         env:
           NDI_ONTOLOGY_MATLAB_DIR: ${{ github.workspace }}/ndi-ontology-matlab
+          # A run that skipped every live case is not a passing run. Without
+          # this, one throttled probe against OLS silently turned this job into
+          # "6 passed, 61 skipped in 6.56s" and reported success.
+          NDI_ONTOLOGY_REQUIRE_LIVE: "1"
         run: pytest tests/test_shared_cases.py -v --tb=short -rs

@@ -171,6 +171,12 @@ implementations are checked against it directly. The file is never vendored here
 copy would drift from MATLAB's exactly as `ontology_list.json` did, and a stale *test* fixture
 reports a parity that is not there.
 
+In CI the job also sets `NDI_ONTOLOGY_REQUIRE_LIVE=1`, which turns "the ontology APIs are
+unreachable" from a skip into a failure. Without it, one throttled probe against OLS silently
+reduced the whole job to `6 passed, 61 skipped in 6.56s` — a green check that verified no parity
+at all. This mirrors NDI-python's `NDI_SYMMETRY_STRICT=1`: a check that could not run counts as
+a failure, not a pass.
+
 Of the 66 cases, 47 run today and 19 skip themselves naming
 [NDI-python#98](https://github.com/Waltham-Data-Science/NDI-python/issues/98), so `-rs` output
 doubles as a progress meter for the port. Cases whose API is unreachable skip rather than fail,

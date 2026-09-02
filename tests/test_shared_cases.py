@@ -83,16 +83,39 @@ requires_case_file = pytest.mark.skipif(
 
 
 def _can_reach_network() -> bool:
-    """Probe through `requests`, for the reason given in tests/matlab_tests."""
-    try:
-        return (
-            requests.get("https://www.ebi.ac.uk/ols4/api/ontologies", timeout=5).status_code == 200
-        )
-    except requests.RequestException:
-        return False
+    """Probe through `requests`, for the reason given in tests/matlab_tests.
+
+    Retried, because this one request decides whether the entire parity suite
+    runs. A single probe against an API that had just been asked for 46
+    lookups turned the whole job into "6 passed, 61 skipped in 6.56s" --
+    green, having checked nothing.
+    """
+    for delay in (0.0, 3.0, 9.0):
+        if delay:
+            time.sleep(delay)
+        try:
+            if (
+                requests.get("https://www.ebi.ac.uk/ols4/api/ontologies", timeout=10).status_code
+                == 200
+            ):
+                return True
+        except requests.RequestException:
+            continue
+    return False
 
 
 NETWORK_AVAILABLE = _can_reach_network()
+
+# Skipping the live cases is a convenience for a developer with no network. In
+# CI it is a lie: the job reports success having verified no parity at all.
+# NDI-python solved the same problem for its symmetry suite with
+# NDI_SYMMETRY_STRICT=1 -- "a symmetry check that could not run counts as a
+# failure" (issue #90) -- so this is that gate, under the matching name.
+REQUIRE_LIVE = os.environ.get("NDI_ONTOLOGY_REQUIRE_LIVE", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 
 def _provider_for(lookup_string: str):
@@ -251,4 +274,20 @@ def test_case_table_covers_every_ported_provider() -> None:
     unexpected = set(uncovered) - known_gaps
     assert not unexpected, (
         f"ported providers with no case in ndi-ontology-matlab's table: " f"{sorted(unexpected)}"
+    )
+
+
+def test_live_apis_reachable_when_required() -> None:
+    """In CI, the parity cases must actually run.
+
+    One clear failure, rather than 43 skips that quietly add up to a green
+    check.
+    """
+    if not REQUIRE_LIVE:
+        pytest.skip("NDI_ONTOLOGY_REQUIRE_LIVE is not set; live cases may skip")
+
+    assert NETWORK_AVAILABLE, (
+        "NDI_ONTOLOGY_REQUIRE_LIVE is set, but the ontology APIs are unreachable "
+        "after three attempts, so every live parity case would skip and this job "
+        "would pass without checking anything. Treat this as a failed run."
     )
