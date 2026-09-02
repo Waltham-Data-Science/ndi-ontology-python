@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  # No branch filter: a PR targeting a feature branch needs lint and tests
+  # just as much as one targeting main.
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ci-lint-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black
+
+      - name: Check formatting with black
+        run: black --check src/ tests/
+
+      - name: Lint with ruff
+        run: ruff check src/ tests/
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run tests with coverage
+        run: |
+          COVERAGE_CORE=$(python -c "import sys; print('sysmon' if sys.version_info >= (3,12) else 'ctrace')")
+          export COVERAGE_CORE
+          # -m "not live": this job must be fast and deterministic, so it runs
+          # only the mocked suite. The live ontology APIs are exercised by the
+          # shared-cases job below.
+          pytest tests/ -v --tb=short -m "not live" \
+            --cov=src/ndi_ontology --cov-report=term-missing
+
+  # The wheel must carry ontology_list.json and NDIC.txt. Testing from the
+  # source tree cannot catch a packaging mistake, because the data files are
+  # found on disk either way -- so build a wheel, install it somewhere else,
+  # and look up a term that reads each file.
+  packaged-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel and install it outside the source tree
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+          mkdir -p /tmp/installcheck
+          pip install dist/*.whl
+
+      - name: Data files resolve from the installed wheel
+        working-directory: /tmp/installcheck
+        run: |
+          python -c "
+          from ndi_ontology.paths import ONTOLOGY_LIST_FILE, NDIC_FILE
+          assert ONTOLOGY_LIST_FILE.exists(), ONTOLOGY_LIST_FILE
+          assert NDIC_FILE.exists(), NDIC_FILE
+          from ndi_ontology import lookup
+          r = lookup('NDIC:1')
+          assert r.id, 'NDIC lookup returned nothing from the installed wheel'
+          print('packaged data OK:', r)
+          "
+
+  # ndi-ontology-matlab drives its own TestOntologyLookup.m from
+  # tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json: 66 cases, each
+  # naming a lookup string and the exact id and name it must produce. That file
+  # is language-neutral, so this job runs the same cases against the Python
+  # port -- the parity check for this namespace.
+  #
+  # The file is checked out, never vendored. A copy here would drift from
+  # MATLAB's exactly as ontology_list.json did before the split, and a stale
+  # test fixture is worse than stale data: it reports a parity that is not
+  # there.
+  shared-cases:
+    name: MATLAB shared case table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out ndi-ontology-matlab (source of truth)
+        uses: actions/checkout@v4
+        with:
+          repository: Waltham-Data-Science/ndi-ontology-matlab
+          path: ndi-ontology-matlab
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # Cases whose ontology has no provider yet skip themselves, naming
+      # NDI-python#98; -rs lists them, so the run doubles as a progress meter
+      # for the port. Cases that hit an unreachable API skip rather than fail,
+      # so only a genuine id/name mismatch turns this job red.
+      - name: Run ndi-ontology-matlab's case table against the port
+        env:
+          NDI_ONTOLOGY_MATLAB_DIR: ${{ github.workspace }}/ndi-ontology-matlab
+          # A run that skipped every live case is not a passing run. Without
+          # this, one throttled probe against OLS silently turned this job into
+          # "6 passed, 61 skipped in 6.56s" and reported success.
+          NDI_ONTOLOGY_REQUIRE_LIVE: "1"
+        run: pytest tests/test_shared_cases.py -v --tb=short -rs

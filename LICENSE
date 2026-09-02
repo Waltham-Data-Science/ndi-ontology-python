@@ -1,0 +1,7 @@
+ndi-ontology-python is licensed under [CC BY-NC-SA 4.0](http://creativecommons.org/licenses/by-nc-sa/4.0/?ref=chooser-v1).
+
+This work may be used freely for non-commercial purposes under the terms of CC BY-NC-SA 4.0. Commercial use requires a separate license; contact info@walthamdatascience.com for licensing information.
+
+This repository is the Python port of ndi-ontology-matlab
+(https://github.com/Waltham-Data-Science/ndi-ontology-matlab) and carries the
+same license as that work.
