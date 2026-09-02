@@ -158,7 +158,7 @@ def test_matlab_case_table(case: dict) -> None:
     lookup_string = case["lookup_string"]
 
     provider = _provider_for(lookup_string)
-    if provider is None:
+    if provider is None and ":" in lookup_string:
         pytest.skip(
             f"no provider for {lookup_string!r}: ontology not ported yet "
             f"(Waltham-Data-Science/NDI-python#98)"
@@ -168,7 +168,11 @@ def test_matlab_case_table(case: dict) -> None:
     # that hold with no network at all -- and, since that file is this
     # repository's to ship, the ones most worth checking here. Gate only the
     # cases that actually call out.
-    if provider is not NDICProvider:
+    # A case with no prefix at all (the table has one: "275") never reaches a
+    # provider -- it is testing that an unprefixed string is rejected -- so it
+    # needs neither a provider nor the network. Skipping it as "not ported"
+    # would have been a lie about why it did not run.
+    if provider is not None and provider is not NDICProvider:
         if not NETWORK_AVAILABLE:
             pytest.skip("no network access; this case queries a live ontology API")
         time.sleep(INTER_CASE_DELAY_S)

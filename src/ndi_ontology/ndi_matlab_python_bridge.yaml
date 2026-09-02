@@ -314,9 +314,20 @@ providers:
     inherits: "OLSProvider"
     status: ported
     matlab_last_sync_hash: "8e109b0"
+    matlab_examined: partial
     sync_status: >
-      NOT EXAMINED against CHEBI.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      ID-HANDLING PATH EXAMINED against ontology.m at 9d9b4e1 (2026-09-02);
+      the rest of CHEBI.m at 8e109b0 is still unexamined.
+      MATLAB's preprocessLookupInput (ontology.m:395) builds the OLS query
+      as `[ontology_prefix ':' numeric_id]` -- the numeric id verbatim,
+      with no padding. Python padded it with term.zfill(7); FIXED
+      2026-09-02 to pass through. The padding was a no-op for every
+      ontology whose ids are 7 digits (CL, PATO, Uberon, EMPTY), which is
+      why it went unnoticed, and wrong for CHEBI, whose are not: every
+      lookup by id sent CHEBI:0015377 for CHEBI:15377 and matched nothing,
+      while lookup by name kept working. Found by the shared case table's
+      first live run in CI. The fix is in OLSProvider, so it applies to
+      CL, PATO, EFO, SNOMED and OM as well; only CHEBI was affected.
       never checked against this MATLAB class.
 
   - name: PATO
@@ -450,8 +461,23 @@ providers:
     status: ported
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      NOT EXAMINED against EMPTY.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      NOT EXAMINED against EMPTY.m at 8e109b0 -- the fix below was verified
+      against the live ontology, not against the MATLAB source, so this
+      entry stays unexamined.
+      The provider fetched its JSON from
+      raw.githubusercontent.com/Waltham-ndi_gui_Data-Science/..., which
+      404s. The org is Waltham-Data-Science; 'ndi_gui_Data' is the residue
+      of a global find/replace of the identifier `Data` (NDI-python has a
+      real ndi_gui_Data class in gui/data.py) that rewrote the word
+      wherever it appeared, URLs included. _load_ontology caught the 404,
+      cached an empty index and returned it, so every EMPTY lookup returned
+      an empty result and the table's three EMPTY failure cases passed
+      vacuously. FIXED 2026-09-02; verified live, all six EMPTY cases now
+      behave correctly.
+      NDI-python carries the same corruption in three provenance URLs
+      (__init__.py:97, app/__init__.py:113 and 116), where it is written
+      into ndi_document provenance whenever git is unavailable. Reported,
+      not fixed here -- different repository.
       never checked against this MATLAB class.
 
   # --- Not ported: MATLAB class exists, Python provider does not ---------

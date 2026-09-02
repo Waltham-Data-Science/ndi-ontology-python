@@ -60,7 +60,15 @@ class OLSProvider(OntologyProvider):
         is_numeric = bool(re.match(r"^\d+$", term))
 
         if is_numeric:
-            full_id = f"{prefix}:{term.zfill(7)}"
+            # Pass the numeric id through verbatim. MATLAB's
+            # preprocessLookupInput builds `[ontology_prefix ':' numeric_id]`
+            # with no padding, and OLS obo_id is an exact-match field.
+            # Python used term.zfill(7), which is a no-op for the ontologies
+            # whose ids happen to be 7 digits (CL, PATO, UBERON, EMPTY) and
+            # wrong for those whose are not: CHEBI:15377 became CHEBI:0015377
+            # and matched nothing, so every CHEBI lookup by id returned empty
+            # while lookup by name kept working.
+            full_id = f"{prefix}:{term}"
             return self._search_ols(full_id, "obo_id", prefix)
         else:
             return self._search_ols(term, "label", prefix)
@@ -506,7 +514,7 @@ class EMPTYProvider(OntologyProvider):
 
     MATLAB equivalent: +ndi/+ontology/EMPTY.m
 
-    Fetches the EMPTY ontology as JSON from the Waltham-ndi_gui_Data-Science
+    Fetches the EMPTY ontology as JSON from the Waltham-Data-Science
     GitHub repository and caches it in memory. Supports lookup by
     numeric ID (e.g. ``"0000074"``), full OBO-style ID
     (e.g. ``"EMPTY_0000074"``), or label substring
@@ -516,7 +524,7 @@ class EMPTYProvider(OntologyProvider):
     name = "EMPTY"
 
     _JSON_URL = (
-        "https://raw.githubusercontent.com/Waltham-ndi_gui_Data-Science/empty-ontology"
+        "https://raw.githubusercontent.com/Waltham-Data-Science/empty-ontology"
         "/main/empty-base.json"
     )
 

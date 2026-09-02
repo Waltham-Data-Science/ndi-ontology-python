@@ -304,8 +304,18 @@ class TestOLSProvider:
         result = provider._doc_to_result(doc, "CL")
         assert result.id == "CL:9999999"
 
-    def test_numeric_id_zero_padding(self):
-        """Numeric IDs should be zero-padded to 7 digits."""
+    def test_numeric_id_passed_through_verbatim(self):
+        """Numeric IDs go to OLS unpadded, as MATLAB sends them.
+
+        This test previously asserted the opposite -- that ``lookup_term("1")``
+        queries ``CL:0000001`` -- which encoded a defect. MATLAB's
+        preprocessLookupInput builds ``[ontology_prefix ':' numeric_id]`` with
+        no padding, and obo_id is an exact-match field, so padding to 7 digits
+        silently broke every ontology whose ids are not 7 digits: CHEBI:15377
+        was sent as CHEBI:0015377 and matched nothing. It was invisible because
+        the ontologies with 7-digit ids (CL, PATO, UBERON, EMPTY) padded to
+        themselves, and because lookup by name was unaffected.
+        """
         from ndi_ontology.providers import CLProvider
 
         provider = CLProvider()
@@ -325,7 +335,16 @@ class TestOLSProvider:
         with patch.object(provider, "_http_get_json", return_value=mock_response) as mock_get:
             provider.lookup_term("1")
             args, kwargs = mock_get.call_args
-            assert kwargs["params"]["q"] == "CL:0000001"
+            assert kwargs["params"]["q"] == "CL:1"
+
+        # The case that padding broke: a CHEBI id is not 7 digits.
+        from ndi_ontology.providers import CHEBIProvider
+
+        chebi = CHEBIProvider()
+        with patch.object(chebi, "_http_get_json", return_value=mock_response) as mock_get:
+            chebi.lookup_term("15377", "CHEBI")
+            args, kwargs = mock_get.call_args
+            assert kwargs["params"]["q"] == "CHEBI:15377"
 
 
 # ---------------------------------------------------------------------------
