@@ -649,6 +649,22 @@ tests:
     sync_status: >
       Ported before the extraction; not re-read against TestOntologyLookup.m
       at 8e109b0.
+    decision_log: >
+      Skipping live tests has no MATLAB counterpart. TestOntologyLookup.m has
+      no assumeTrue, no assumeFail and no skip of any kind -- only the class
+      comment "Requires an active internet connection to query external APIs."
+      Run it without one and it fails.
+      Python skips instead, which is a real convenience for a developer behind
+      a proxy that blocks ebi.ac.uk, and a lie in CI: four tests that quietly
+      did not run look exactly like four that passed. That is how a stale
+      assertion in test_lookup_invalid_term -- asserting lookup() "should not
+      raise", the opposite of the verifyError this file's MATLAB source has
+      always asserted -- survived a full local suite and first failed on CI.
+      NDI_ONTOLOGY_REQUIRE_LIVE restores MATLAB's guarantee where it counts:
+      set it, and unreachable APIs fail the run instead of skipping it. The
+      shared-cases job sets it for both live modules. Unset, the skip stands,
+      so a local run without network is still usable.
+      Recorded 2026-09-02.
 
   - matlab_path: "tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json"
     python_path: "tests/test_shared_cases.py"
@@ -714,12 +730,15 @@ symmetry:
     a weaker substitute for it: it pins the values MATLAB must produce rather
     than only agreeing with whatever MATLAB last produced, and it cannot go
     stale between runs.
-    Two things are outside what the shared fixture pins, and neither wants
+    One thing is outside what the shared fixture pins, and it does not want
     artifact plumbing: `definition` and `synonyms`, which the table does not
-    carry (MATLAB's own test ignores them too -- it captures only id and name),
-    and the error path, where the table records should_succeed but MATLAB
-    raises while Python returns an empty result. If the table grows definition
-    or synonym columns, this runner should assert them too.
+    carry (MATLAB's own test ignores them too -- it captures only id and name).
+    If the table grows definition or synonym columns, this runner should assert
+    them too.
+    The error path is no longer outside it. The table's should_succeed=false
+    cases once meant "MATLAB raises, Python returns an empty result", so the
+    runner accepted either; since lookup() raises, both sides are checked the
+    same way MATLAB checks itself, verifyError(funcToTest, ?MException).
     Recorded 2026-09-02.
 
   # --- Supporting modules with MATLAB equivalents ---
