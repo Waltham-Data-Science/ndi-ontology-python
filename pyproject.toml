@@ -68,6 +68,7 @@ python_files = ["test_*.py", "*_test.py"]
 addopts = "-v --tb=short"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "live: hits live ontology APIs and needs a ndi-ontology-matlab checkout (deselect with '-m \"not live\"')",
 ]
 
 [tool.black]

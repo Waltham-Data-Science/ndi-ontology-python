@@ -150,8 +150,31 @@ Registering a new ontology should mean editing `ontology_list.json` and adding a
 
 ```bash
 pip install -e ".[dev]"
-black src/ tests/ && ruff check src/ tests/ && pytest tests/ -q
+black src/ tests/ && ruff check src/ tests/ && pytest tests/ -q -m "not live"
 ```
+
+### The shared case table (parity with MATLAB)
+
+`ndi-ontology-matlab` drives its own tests from
+`tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json` — 66 cases across 15 ontologies,
+each naming a lookup string and the exact id and name it must produce. That file is
+language-neutral, so this repository runs **the same cases** against the Python port:
+
+```bash
+git clone https://github.com/Waltham-Data-Science/ndi-ontology-matlab.git
+NDI_ONTOLOGY_MATLAB_DIR=./ndi-ontology-matlab pytest tests/test_shared_cases.py -v -rs
+```
+
+This is the parity check for the namespace, and it needs no artifact-exchange machinery: a
+lookup's output is two strings, so the expected values live in the fixture and both
+implementations are checked against it directly. The file is never vendored here — a second
+copy would drift from MATLAB's exactly as `ontology_list.json` did, and a stale *test* fixture
+reports a parity that is not there.
+
+Of the 66 cases, 47 run today and 19 skip themselves naming
+[NDI-python#98](https://github.com/Waltham-Data-Science/NDI-python/issues/98), so `-rs` output
+doubles as a progress meter for the port. Cases whose API is unreachable skip rather than fail,
+so only a genuine mismatch turns the job red.
 
 ### Porting contract
 

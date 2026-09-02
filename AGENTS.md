@@ -95,8 +95,21 @@ Before pushing, run these — they are what CI runs.
 ```bash
 black --check src/ tests/     # black src/ tests/ to fix
 ruff check src/ tests/        # ruff check --fix src/ tests/ to fix
-pytest tests/ -v --tb=short
+pytest tests/ -v --tb=short -m "not live"
 ```
+
+The `live` marker covers the shared case table — `ndi-ontology-matlab`'s own
+`ontology_lookup_tests.json`, run against this port. It needs a checkout of that repository and
+reaches live ontology APIs, so it is a separate CI job. Run it before changing any provider:
+
+```bash
+NDI_ONTOLOGY_MATLAB_DIR=/path/to/ndi-ontology-matlab pytest tests/test_shared_cases.py -v -rs
+```
+
+A case that fails there is a **port defect** until you have read the MATLAB source and
+established otherwise. Known divergences are `xfail(strict=True)` with a reason naming the
+MATLAB file and line — strict, so a fixed one turns CI red until its marker is removed. Do not
+add a marker to make a red case go away.
 
 Quick pre-push checklist:
 

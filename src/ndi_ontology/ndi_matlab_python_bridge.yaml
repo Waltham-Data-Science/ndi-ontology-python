@@ -529,14 +529,49 @@ tests:
       at 8e109b0.
 
   - matlab_path: "tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json"
-    python_path: null
+    python_path: "tests/test_shared_cases.py"
     matlab_last_sync_hash: "8e109b0"
+    role: symmetry
     sync_status: >
-      NOT CONSUMED. This is a language-neutral case table -- prefix, input,
-      expected id, expected name -- which both implementations could read
-      directly, giving cross-language parity without artifact plumbing.
-      Wiring it up is the cheapest symmetry win available here and should be
-      done alongside NDI-python#98.
+      CONSUMED DIRECTLY, not vendored. This is the parity check for the
+      ontology namespace: 66 cases across 15 ontologies, each naming a lookup
+      string and the exact expected id and name. Both implementations read the
+      same file -- MATLAB through TestOntologyLookup.m, Python through
+      tests/test_shared_cases.py -- so parity is checked against one fixture
+      with no artifact to build, exchange or version. CI checks out
+      ndi-ontology-matlab and points NDI_ONTOLOGY_MATLAB_DIR at it; a copy
+      here would drift as ontology_list.json did, and a stale test fixture
+      reports parity that is not there.
+      Of the 66: 47 run against ported providers, 19 skip themselves naming
+      NDI-python#98, so the run doubles as a progress meter for the port.
+
+# =========================================================================
+# Symmetry
+# =========================================================================
+symmetry:
+  mechanism: shared_fixture
+  artifact_exchange_required: false
+  decision_log: >
+    NDI-python's symmetry suite has MATLAB produce artifacts that Python reads
+    back (tests/symmetry/make_artifacts, read_artifacts). That machinery exists
+    because those outputs -- sessions, documents, binary files -- cannot be
+    written down as literals, so the only way to compare is to have one side
+    generate and the other consume.
+    ndi.ontology needs none of it. A lookup takes a string and returns a
+    string pair, and ndi-ontology-matlab's ontology_lookup_tests.json already
+    states the expected pair for each input. When the expected output can be
+    written into the fixture, both implementations can be checked against the
+    fixture directly -- which is a stronger check than artifact exchange, not
+    a weaker substitute for it: it pins the values MATLAB must produce rather
+    than only agreeing with whatever MATLAB last produced, and it cannot go
+    stale between runs.
+    Two things are outside what the shared fixture pins, and neither wants
+    artifact plumbing: `definition` and `synonyms`, which the table does not
+    carry (MATLAB's own test ignores them too -- it captures only id and name),
+    and the error path, where the table records should_succeed but MATLAB
+    raises while Python returns an empty result. If the table grows definition
+    or synonym columns, this runner should assert them too.
+    Recorded 2026-09-02.
 
   # --- Supporting modules with MATLAB equivalents ---
 supporting_modules:
