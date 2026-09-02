@@ -100,9 +100,23 @@ adding its entry there and a provider class, and nothing else. `UBERON` and `NCI
 registered with no provider behind them, so those lookups resolved a prefix to nothing and
 returned an empty result; a test now fails if any registered prefix loses its provider.
 
-One caveat inherited from the port, and still open: `lookup()` answers an unresolvable prefix,
-a network failure and a genuinely absent term with the same empty `OntologyResult`, where
-MATLAB raises. That is the remaining item of NDI-python#98.
+`lookup()` raises `NDIOntologyLookupError` when a string carries no prefix, the prefix is not
+registered, the term is not in the ontology, or the provider could not answer — matching MATLAB,
+which errors in all four cases. It previously returned an empty `OntologyResult` for every one of
+them, which could not be told apart from a resolved term with blank fields, and which is how four
+separate defects stayed invisible during the port.
+
+MATLAB raises assorted identifiers that callers catch as one `MException`; Python raises one type
+for all of them, with the originating error chained, so a transport failure is still diagnosable:
+
+```python
+from ndi_ontology import NDIOntologyLookupError, lookup
+
+try:
+    result = lookup('CL:0000540')
+except NDIOntologyLookupError as exc:
+    ...          # exc.__cause__ holds the transport error, when there was one
+```
 
 ## Key concepts: ID (node) vs. name (label)
 

@@ -69,6 +69,12 @@ MATLAB path does. NDI-python re-exports it as `ndi.ontology`. See the bridge fil
   it is not a test to relax — if you need a helper from NDI-python, vendor it, as
   `ndi-ontology-matlab` vendors its own `name2variableName`.
 - **Validation:** public API functions use the `@pydantic.validate_call` decorator.
+- **Failures raise.** `lookup()` raises `NDIOntologyLookupError` rather than returning an empty
+  result, matching MATLAB and `ndi_xlang_principles` section 6 ("No Silent Failures"). Do not
+  reintroduce an empty-result path: an empty result is indistinguishable from a resolved term
+  with blank fields, and that ambiguity hid four defects during the port. Providers may still
+  return an empty result internally to mean "not found"; `lookup()` is the single place that
+  becomes the raise.
 - **Data files** live inside the package (`src/ndi_ontology/ndi_common/`) and are resolved
   through `ndi_ontology.paths`, never by walking up from the working directory.
 - **Adding an ontology** should touch `ontology_list.json` and `providers.py` — nothing else.

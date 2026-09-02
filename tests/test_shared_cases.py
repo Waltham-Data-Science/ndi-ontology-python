@@ -183,14 +183,25 @@ RETRY_DELAYS_S = (2.0, 5.0, 10.0)
 
 
 def _lookup_expecting_success(lookup_string: str):
-    """lookup(), retried while the result is empty."""
-    result = lookup(lookup_string)
-    for delay in RETRY_DELAYS_S:
-        if result:
-            break
-        time.sleep(delay)
-        result = lookup(lookup_string)
-    return result
+    """lookup(), retried while it fails.
+
+    Since NDI-python#98, lookup() raises rather than returning empty, so the
+    retry catches instead of testing falsiness. The reason for retrying is
+    unchanged: a throttled API and a genuinely absent term still produce the
+    same failure, so a single attempt cannot tell them apart. A provider that
+    is really wrong fails every attempt and the case still fails.
+    """
+    from ndi_ontology import NDIOntologyLookupError
+
+    last: Exception | None = None
+    for delay in (0.0, *RETRY_DELAYS_S):
+        if delay:
+            time.sleep(delay)
+        try:
+            return lookup(lookup_string)
+        except NDIOntologyLookupError as exc:
+            last = exc
+    raise AssertionError(f"{lookup_string!r} never resolved: {last}")
 
 
 def _case_id(case: dict) -> str:
@@ -237,20 +248,14 @@ def test_matlab_case_table(case: dict) -> None:
             f"expected {case['expected_name']!r}, got {result.name!r}"
         )
     else:
-        # MATLAB asserts an error here (verifyError(..., ?MException)). Python
-        # returns an empty OntologyResult instead -- the known divergence that
-        # is the first item of NDI-python#98. Accept either, so this suite
-        # reports the mismatches it exists to catch rather than re-reporting
-        # that one already-tracked difference on every failure case, and so it
-        # keeps passing unchanged once #98 makes lookup() raise.
-        try:
-            result = lookup(lookup_string)
-        except Exception:
-            return
-        assert not result, (
-            f"expected no result for {lookup_string!r}, got "
-            f"id={result.id!r} name={result.name!r}"
-        )
+        # MATLAB asserts an error here: verifyError(funcToTest, ?MException).
+        # Python now does the same, raising NDIOntologyLookupError for every
+        # failure, so this asserts the raise rather than accepting an empty
+        # result as it did while that divergence was open (NDI-python#98).
+        from ndi_ontology import NDIOntologyLookupError
+
+        with pytest.raises(NDIOntologyLookupError):
+            lookup(lookup_string)
 
 
 @requires_case_file

@@ -99,17 +99,28 @@ class TestLookup:
 
         clearCache()
 
-    def test_no_colon_returns_empty(self):
-        from ndi_ontology import lookup
+    def test_no_colon_raises(self):
+        """An unprefixed string is not a lookup. MATLAB errors; so do we."""
+        import pytest
 
-        r = lookup("neuron")
-        assert not r
+        from ndi_ontology import NDIOntologyLookupError, lookup
 
-    def test_unknown_prefix_returns_empty(self):
-        from ndi_ontology import lookup
+        with pytest.raises(NDIOntologyLookupError, match="no ontology prefix"):
+            lookup("neuron")
 
-        r = lookup("UNKNOWN:12345")
-        assert not r
+    def test_unknown_prefix_raises_and_names_the_known_ones(self):
+        import pytest
+
+        from ndi_ontology import NDIOntologyLookupError, lookup
+
+        with pytest.raises(NDIOntologyLookupError) as excinfo:
+            lookup("UNKNOWN:12345")
+
+        message = str(excinfo.value)
+        assert "UNKNOWN" in message
+        # The message lists what *is* registered, which is the first thing
+        # anyone hitting this needs.
+        assert "NDIC" in message
 
     def test_clear_cache_string(self):
         from ndi_ontology import lookup
@@ -157,14 +168,38 @@ class TestLookup:
             lookup("cl:1")  # lowercase
             assert mock_lt.called
 
-    def test_provider_exception_returns_empty(self):
-        """If provider raises, lookup returns empty result."""
-        from ndi_ontology import lookup
+    def test_provider_exception_is_chained(self):
+        """A provider error surfaces as NDIOntologyLookupError, cause intact.
+
+        The failure is not separately typed -- MATLAB raises one MException for
+        every kind of failure and so do we -- but chaining keeps a transport
+        problem diagnosable instead of indistinguishable from a missing term,
+        which is the ambiguity this whole change removes.
+        """
+        import pytest
+
+        from ndi_ontology import NDIOntologyLookupError, lookup
 
         with patch("ndi_ontology.providers.OLSProvider.lookup_term") as mock_lt:
             mock_lt.side_effect = RuntimeError("API down")
-            result = lookup("CL:0000540")
-            assert not result
+            with pytest.raises(NDIOntologyLookupError) as excinfo:
+                lookup("CL:0000540")
+
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
+        assert "API down" in str(excinfo.value)
+
+    def test_a_failed_lookup_is_not_cached(self):
+        """A failure must not become permanent for the life of the process."""
+        import pytest
+
+        from ndi_ontology import NDIOntologyLookupError, _lookup_cache, lookup
+
+        with patch("ndi_ontology.providers.OLSProvider.lookup_term") as mock_lt:
+            mock_lt.side_effect = RuntimeError("transient")
+            with pytest.raises(NDIOntologyLookupError):
+                lookup("CL:0000540")
+
+        assert "CL:0000540" not in _lookup_cache
 
 
 # ---------------------------------------------------------------------------
