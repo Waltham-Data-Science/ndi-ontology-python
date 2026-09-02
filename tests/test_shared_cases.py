@@ -267,10 +267,14 @@ def test_case_table_covers_every_ported_provider() -> None:
             covered.add(provider)
 
     uncovered = sorted(name for name, cls in PROVIDER_REGISTRY.items() if cls not in covered)
-    # WBStrain, SNOMED and EFO are ported here but absent from MATLAB's table.
-    # Recorded rather than asserted away: the fix belongs upstream, as cases
-    # added to ndi-ontology-matlab, not as a weaker assertion here.
-    known_gaps = {"WBStrain", "SNOMED", "EFO"}
+    # Ported here but absent from MATLAB's table, so nothing checks their
+    # parity. Recorded rather than asserted away: the fix belongs upstream, as
+    # cases added to ndi-ontology-matlab, not as a weaker assertion here.
+    #
+    # NCIT joined this list when it was ported for NDI-python#98 -- the table
+    # covers fifteen ontologies and NCIT is not one of them. This test is what
+    # noticed; that is what it is for.
+    known_gaps = {"WBStrain", "SNOMED", "EFO", "NCIT"}
     unexpected = set(uncovered) - known_gaps
     assert not unexpected, (
         f"ported providers with no case in ndi-ontology-matlab's table: " f"{sorted(unexpected)}"

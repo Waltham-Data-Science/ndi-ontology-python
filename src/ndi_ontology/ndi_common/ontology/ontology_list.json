@@ -49,7 +49,12 @@
     {"prefix": "NCIT", "ontology_name": "NCIT"},
     {"prefix": "SNOMED", "ontology_name": "SNOMED"},
     {"prefix": "WBStrain", "ontology_name": "WBStrain"},
-    {"prefix": "EFO", "ontology_name": "EFO"}
+    {"prefix": "EFO", "ontology_name": "EFO"},
+    {"prefix": "EDAM", "ontology_name": "EDAM"},
+    {"prefix": "format", "ontology_name": "EDAM"},
+    {"prefix": "IAO", "ontology_name": "IAO"},
+    {"prefix": "schema", "ontology_name": "SchemaOrg"},
+    {"prefix": "STATO", "ontology_name": "STATO"}
   ],
   "Ontologies": [
     {
@@ -127,6 +132,26 @@
       "name": "EFO",
       "homepage": "https://www.ebi.ac.uk/efo/",
       "api_url": "https://www.ebi.ac.uk/ols4/api/ontologies/efo"
+    },
+    {
+      "name": "EDAM",
+      "homepage": "http://edamontology.org",
+      "api_url": "https://www.ebi.ac.uk/ols4/api/ontologies/edam"
+    },
+    {
+      "name": "IAO",
+      "homepage": "https://github.com/information-artifact-ontology/IAO",
+      "api_url": "https://www.ebi.ac.uk/ols4/api/ontologies/iao"
+    },
+    {
+      "name": "SchemaOrg",
+      "homepage": "https://schema.org",
+      "api_url": "https://schema.org/"
+    },
+    {
+      "name": "STATO",
+      "homepage": "http://stato-ontology.org/",
+      "api_url": "https://www.ebi.ac.uk/ols4/api/ontologies/stato"
     }
   ]
 }

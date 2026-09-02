@@ -83,20 +83,26 @@ result.short_name
 | `EMPTY` | [Experimental Measurements, Purposes, and Treatments ontologY](https://github.com/Waltham-Data-Science/empty-ontology) | ✅ |
 | `NDIC` | NDI Controlled Vocabulary (local) | ✅ |
 | `WBStrain` | [WormBase Strain Database](https://wormbase.org) | ✅ |
-| `UBERON` | [Uberon Multi-Species Anatomy Ontology](http://obofoundry.org/ontology/uberon.html) | ⛔ |
-| `NCIT` | [NCI Thesaurus](http://obofoundry.org/ontology/ncit.html) | ⛔ |
-| `EDAM` / `format` | [EDAM Bioinformatics Ontology](http://edamontology.org) | ⛔ |
-| `IAO` | [Information Artifact Ontology](http://obofoundry.org/ontology/iao.html) | ⛔ |
-| `STATO` | [Statistics Ontology](http://stato-ontology.org/) | ⛔ |
-| `schema` | [Schema.org](https://schema.org) | ⛔ |
+| `UBERON` | [Uberon Multi-Species Anatomy Ontology](http://obofoundry.org/ontology/uberon.html) | ✅ |
+| `NCIT` | [NCI Thesaurus](http://obofoundry.org/ontology/ncit.html) | ✅ |
+| `EDAM` / `format` | [EDAM Bioinformatics Ontology](http://edamontology.org) | ✅ |
+| `IAO` | [Information Artifact Ontology](http://obofoundry.org/ontology/iao.html) | ✅ |
+| `STATO` | [Statistics Ontology](http://stato-ontology.org/) | ✅ |
+| `schema` | [Schema.org](https://schema.org) | ✅ |
 
-⛔ = implemented in `ndi-ontology-matlab`, not yet ported. Tracked by
-[NDI-python#98](https://github.com/Waltham-Data-Science/NDI-python/issues/98).
+All nineteen ontologies MATLAB implements are ported, as of
+[NDI-python#98](https://github.com/Waltham-Data-Science/NDI-python/issues/98). Three mechanisms
+are in play, matching MATLAB: most are OLS-backed; `EDAM` and `IAO` download and parse an OWL
+file; `schema` reads each term's JSON-LD document from schema.org.
 
-Note that `UBERON` and `NCIT` are *registered* in `ontology_list.json` but have no provider
-class, so today `lookup('UBERON:0000948')` returns an empty result rather than raising. That is
-the current behaviour, carried over unchanged from NDI-python; fixing it is the first item of
-NDI-python#98.
+Prefixes are registered in exactly one place — `ontology_list.json`. Adding an ontology means
+adding its entry there and a provider class, and nothing else. `UBERON` and `NCIT` used to be
+registered with no provider behind them, so those lookups resolved a prefix to nothing and
+returned an empty result; a test now fails if any registered prefix loses its provider.
+
+One caveat inherited from the port, and still open: `lookup()` answers an unresolvable prefix,
+a network failure and a genuinely absent term with the same empty `OntologyResult`, where
+MATLAB raises. That is the remaining item of NDI-python#98.
 
 ## Key concepts: ID (node) vs. name (label)
 
