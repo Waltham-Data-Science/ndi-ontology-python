@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ndi-ontology"
+version = "0.1.0"
+description = "Ontology lookup for NDI (Neuroscience Data Interface) - Python port of ndi-ontology-matlab"
+readme = "README.md"
+license = {text = "CC-BY-NC-SA-4.0"}
+authors = [
+    {name = "VH-Lab", email = "vhlab@brandeis.edu"}
+]
+maintainers = [
+    {name = "Waltham Data Science"}
+]
+keywords = [
+    "neuroscience",
+    "ontology",
+    "controlled vocabulary",
+    "data management",
+    "scientific computing",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+requires-python = ">=3.10"
+
+# Deliberately minimal. This package must not depend on NDI-python: NDI-python
+# depends on it, and a dependency in the other direction would be a cycle.
+dependencies = [
+    "requests>=2.28.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://ndi.vhlab.org"
+Source = "https://github.com/Waltham-Data-Science/ndi-ontology-python"
+"MATLAB source of truth" = "https://github.com/Waltham-Data-Science/ndi-ontology-matlab"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ndi_ontology"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "LICENSE", "README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B905",  # zip-without-explicit-strict (too noisy for now)
+    "E402",  # module-level imports not at top (deferred imports are intentional)
+    "B017",  # assertRaises(Exception) in tests is acceptable
+    "B028",  # stacklevel in warnings.warn
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "UP035"]  # unused imports are re-exports
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
