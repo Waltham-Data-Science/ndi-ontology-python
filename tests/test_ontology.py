@@ -910,3 +910,297 @@ class TestOntologyResultIteration:
 
         ont_id, name, *_ = OntologyResult()
         assert (ont_id, name) == ("", "")
+
+
+# ---------------------------------------------------------------------------
+# Providers ported from ndi-ontology-matlab (NDI-python#98)
+# ---------------------------------------------------------------------------
+
+
+class TestOLSPortedProviders:
+    """Uberon, NCIT and STATO are OLSProvider subclasses, as in MATLAB.
+
+    Each MATLAB class sets only ontology_prefix and ontology_name_ols and
+    defers to the shared preprocessLookupInput / searchOLSAndPerformIRILookup
+    helpers, so the only thing worth asserting here is that the two parameters
+    are right and reach the query.
+    """
+
+    OLS_PARAMS = {
+        "Uberon": ("uberon", "UBERON"),
+        "NCIT": ("ncit", "NCIT"),
+        "STATO": ("stato", "STATO"),
+    }
+
+    def test_ols_parameters_match_matlab(self):
+        from ndi_ontology.providers import NCITProvider, STATOProvider, UberonProvider
+
+        for cls, key in (
+            (UberonProvider, "Uberon"),
+            (NCITProvider, "NCIT"),
+            (STATOProvider, "STATO"),
+        ):
+            ontology, prefix = self.OLS_PARAMS[key]
+            assert cls.ols_ontology == ontology
+            assert cls.ols_prefix == prefix
+
+    def test_lookup_by_id_queries_the_right_ontology(self):
+        from ndi_ontology.providers import UberonProvider
+
+        provider = UberonProvider()
+        response = {
+            "response": {
+                "docs": [
+                    {
+                        "obo_id": "UBERON:0000948",
+                        "label": "heart",
+                        "short_form": "UBERON_0000948",
+                        "description": ["a hollow muscular organ"],
+                        "synonym": ["chambered heart"],
+                    }
+                ]
+            }
+        }
+        with patch.object(provider, "_http_get_json", return_value=response) as mock_get:
+            result = provider.lookup_term("0000948", "UBERON")
+
+        _args, kwargs = mock_get.call_args
+        assert kwargs["params"]["ontology"] == "uberon"
+        assert kwargs["params"]["q"] == "UBERON:0000948"
+        assert result.id == "UBERON:0000948"
+        assert result.name == "heart"
+
+    def test_lookup_by_name(self):
+        from ndi_ontology.providers import STATOProvider
+
+        provider = STATOProvider()
+        response = {
+            "response": {
+                "docs": [
+                    {
+                        "obo_id": "STATO:0000700",
+                        "label": "p-value",
+                        "short_form": "STATO_0000700",
+                        "description": [],
+                        "synonym": [],
+                    }
+                ]
+            }
+        }
+        with patch.object(provider, "_http_get_json", return_value=response) as mock_get:
+            result = provider.lookup_term("p-value", "STATO")
+
+        _args, kwargs = mock_get.call_args
+        assert kwargs["params"]["queryFields"] == "label"
+        assert result.id == "STATO:0000700"
+
+    def test_not_found_is_empty(self):
+        from ndi_ontology.providers import NCITProvider
+
+        provider = NCITProvider()
+        with patch.object(provider, "_http_get_json", return_value={"response": {"docs": []}}):
+            assert not provider.lookup_term("NoSuchTerm", "NCIT")
+
+
+EDAM_OWL = """
+<owl:Class rdf:about="http://edamontology.org/format_1929">
+  <rdfs:label>FASTA</rdfs:label>
+  <obo:IAO_0000115>FASTA format.</obo:IAO_0000115>
+</owl:Class>
+<owl:Class rdf:about="http://edamontology.org/data_0006">
+  <rdfs:label>Data</rdfs:label>
+</owl:Class>
+<owl:Class rdf:about="http://edamontology.org/notanid">
+  <rdfs:label>Skipped</rdfs:label>
+</owl:Class>
+"""
+
+IAO_OWL = """
+<owl:Class rdf:about="http://purl.obolibrary.org/obo/IAO_0000310">
+  <rdfs:label>document</rdfs:label>
+  <obo:IAO_0000115>A collection of information content entities.</obo:IAO_0000115>
+  <oboInOwl:hasExactSynonym>doc</oboInOwl:hasExactSynonym>
+</owl:Class>
+<rdf:Description rdf:about="http://purl.obolibrary.org/obo/IAO_0000030">
+  <rdfs:label>information content entity</rdfs:label>
+</rdf:Description>
+<rdf:Description rdf:about="http://purl.obolibrary.org/obo/IAO_0000099">
+</rdf:Description>
+"""
+
+
+class TestEDAMProvider:
+    """MATLAB equivalent: +ndi/+ontology/EDAM.m."""
+
+    def _provider(self):
+        from ndi_ontology.providers import EDAMProvider
+
+        EDAMProvider._cache = None
+        return EDAMProvider()
+
+    def test_lookup_by_numeric_id_drops_the_sub_namespace(self):
+        """EDAM IRIs are format_1929 / data_0006; the id returned is EDAM:1929."""
+        from ndi_ontology.providers import EDAMProvider
+
+        provider = self._provider()
+        with patch.object(EDAMProvider, "_fetch_owl", return_value=EDAM_OWL):
+            result = provider.lookup_term("1929", "EDAM")
+
+        assert result.id == "EDAM:1929"
+        assert result.name == "FASTA"
+        assert result.definition == "FASTA format."
+
+    def test_lookup_by_name_is_case_insensitive(self):
+        from ndi_ontology.providers import EDAMProvider
+
+        provider = self._provider()
+        with patch.object(EDAMProvider, "_fetch_owl", return_value=EDAM_OWL):
+            assert provider.lookup_term("fasta", "EDAM").id == "EDAM:1929"
+
+    def test_malformed_local_ids_are_skipped(self):
+        """`notanid` has no `<word>_<digits>` shape, so MATLAB skips it."""
+        from ndi_ontology.providers import EDAMProvider
+
+        provider = self._provider()
+        with patch.object(EDAMProvider, "_fetch_owl", return_value=EDAM_OWL):
+            assert not provider.lookup_term("Skipped", "EDAM")
+
+    def test_not_found_is_empty(self):
+        from ndi_ontology.providers import EDAMProvider
+
+        provider = self._provider()
+        with patch.object(EDAMProvider, "_fetch_owl", return_value=EDAM_OWL):
+            assert not provider.lookup_term("9999999", "EDAM")
+
+
+class TestIAOProvider:
+    """MATLAB equivalent: +ndi/+ontology/IAO.m."""
+
+    def _provider(self):
+        from ndi_ontology.providers import IAOProvider
+
+        IAOProvider._cache = None
+        return IAOProvider()
+
+    def test_lookup_by_numeric_id(self):
+        from ndi_ontology.providers import IAOProvider
+
+        provider = self._provider()
+        with patch.object(IAOProvider, "_fetch_owl", return_value=IAO_OWL):
+            result = provider.lookup_term("0000310", "IAO")
+
+        assert result.id == "IAO:0000310"
+        assert result.name == "document"
+        assert result.synonyms == ["doc"]
+
+    def test_rdf_description_blocks_count_when_labelled(self):
+        """IAO terms appear as owl:Class AND rdf:Description; MATLAB reads both."""
+        from ndi_ontology.providers import IAOProvider
+
+        provider = self._provider()
+        with patch.object(IAOProvider, "_fetch_owl", return_value=IAO_OWL):
+            assert provider.lookup_term("information content entity", "IAO").id == "IAO:0000030"
+
+    def test_unlabelled_terms_are_skipped(self):
+        """IAO_0000099 carries no rdfs:label, so it is not indexed."""
+        from ndi_ontology.providers import IAOProvider
+
+        provider = self._provider()
+        with patch.object(IAOProvider, "_fetch_owl", return_value=IAO_OWL):
+            assert not provider.lookup_term("0000099", "IAO")
+
+    def test_url_order_matches_matlab(self):
+        """The obolibrary PURL is tried first, the GitHub raw copy second."""
+        from ndi_ontology.providers import IAOProvider
+
+        assert IAOProvider.owl_urls[0].startswith("http://purl.obolibrary.org/")
+        assert "raw.githubusercontent.com" in IAOProvider.owl_urls[1]
+
+
+class TestSchemaOrgProvider:
+    """MATLAB equivalent: +ndi/+ontology/SchemaOrg.m."""
+
+    def _response(self, body: str):
+        mock = MagicMock()
+        mock.text = body
+        mock.json.return_value = __import__("json").loads(body)
+        mock.raise_for_status.return_value = None
+        return mock
+
+    PERSON = (
+        '{"@graph": [{"@id": "schema:Person", "rdfs:label": "Person",'
+        ' "rdfs:comment": "A person (alive, dead, undead, or fictional)."}]}'
+    )
+
+    def test_lookup_reads_the_matching_graph_entry(self):
+        from ndi_ontology.providers import SchemaOrgProvider
+
+        provider = SchemaOrgProvider()
+        with patch("requests.get", return_value=self._response(self.PERSON)):
+            result = provider.lookup_term("Person", "schema")
+
+        assert result.id == "schema:Person"
+        assert result.name == "Person"
+        assert result.definition.startswith("A person")
+
+    def test_full_iri_form_of_the_id_also_matches(self):
+        """The document may spell @id compact or as the full IRI; both count."""
+        from ndi_ontology.providers import SchemaOrgProvider
+
+        body = '{"@graph": [{"@id": "https://schema.org/Dataset", "rdfs:label": "Dataset"}]}'
+        provider = SchemaOrgProvider()
+        with patch("requests.get", return_value=self._response(body)):
+            assert provider.lookup_term("Dataset", "schema").id == "schema:Dataset"
+
+    def test_a_page_describing_something_else_is_a_miss(self):
+        from ndi_ontology.providers import SchemaOrgProvider
+
+        body = '{"@graph": [{"@id": "schema:Thing", "rdfs:label": "Thing"}]}'
+        provider = SchemaOrgProvider()
+        with patch("requests.get", return_value=self._response(body)):
+            assert not provider.lookup_term("NoSuchSchemaOrgTerm", "schema")
+
+    def test_name_falls_back_to_the_term(self):
+        """MATLAB seeds name with the term and only overwrites it from a label."""
+        from ndi_ontology.providers import SchemaOrgProvider
+
+        body = '{"@graph": [{"@id": "schema:Organization"}]}'
+        provider = SchemaOrgProvider()
+        with patch("requests.get", return_value=self._response(body)):
+            result = provider.lookup_term("Organization", "schema")
+
+        assert (result.id, result.name) == ("schema:Organization", "Organization")
+
+
+class TestPrefixRegistryIsSingleSourced:
+    """ontology_list.json is the only place a prefix is registered."""
+
+    def test_every_registered_prefix_has_a_provider(self):
+        """The defect this closes: Uberon and NCIT were registered with none.
+
+        A prefix that resolves to a missing provider produces an empty result,
+        which is indistinguishable from "term not found".
+        """
+        from ndi_ontology import _load_prefix_map
+        from ndi_ontology.providers import PROVIDER_REGISTRY
+
+        unbacked = sorted(
+            {name for name in _load_prefix_map().values() if name not in PROVIDER_REGISTRY}
+        )
+        assert not unbacked, f"registered prefixes with no provider: {unbacked}"
+
+    def test_there_is_no_second_hardcoded_map(self):
+        import ndi_ontology
+
+        assert not hasattr(ndi_ontology, "_PREFIX_MAP"), (
+            "the literal prefix map is back; ontology_list.json must stay the "
+            "single source, or the two can disagree again"
+        )
+
+    def test_aliases_resolve_to_the_canonical_ontology(self):
+        from ndi_ontology import _load_prefix_map
+
+        m = _load_prefix_map()
+        assert m["format"] == "EDAM"
+        assert m["taxonomy"] == "NCBITaxon"
+        assert m["schema"] == "SchemaOrg"

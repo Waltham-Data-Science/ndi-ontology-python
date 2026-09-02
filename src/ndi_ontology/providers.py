@@ -634,6 +634,380 @@ class EMPTYProvider(OntologyProvider):
 
 
 # ---------------------------------------------------------------------------
+# OLS-backed providers ported from ndi-ontology-matlab
+# ---------------------------------------------------------------------------
+
+
+class UberonProvider(OLSProvider):
+    """Uberon multi-species anatomy.
+
+    MATLAB equivalent: +ndi/+ontology/Uberon.m, which sets
+    ontology_prefix = 'UBERON' and ontology_name_ols = 'uberon' and defers to
+    the shared preprocessLookupInput / searchOLSAndPerformIRILookup helpers.
+    """
+
+    name = "Uberon"
+    ols_ontology = "uberon"
+    ols_prefix = "UBERON"
+
+
+class NCITProvider(OLSProvider):
+    """NCI Thesaurus.
+
+    MATLAB equivalent: +ndi/+ontology/NCIT.m -- prefix 'NCIT', OLS id 'ncit'.
+    """
+
+    name = "NCIT"
+    ols_ontology = "ncit"
+    ols_prefix = "NCIT"
+
+
+class STATOProvider(OLSProvider):
+    """Statistics Ontology.
+
+    MATLAB equivalent: +ndi/+ontology/STATO.m -- prefix 'STATO', OLS id 'stato'.
+    """
+
+    name = "STATO"
+    ols_ontology = "stato"
+    ols_prefix = "STATO"
+
+
+# ---------------------------------------------------------------------------
+# OWL-file providers
+# ---------------------------------------------------------------------------
+
+
+class _OWLTermProvider(OntologyProvider):
+    """Shared machinery for providers that parse a downloaded OWL file.
+
+    EDAM and IAO both fetch an OWL document, pull `owl:Class` blocks out of it
+    with a regex, and index the results by numeric id and by lower-cased label.
+    MATLAB implements each separately; the duplicated half is factored out here
+    so the two subclasses carry only what actually differs between them --
+    where the file comes from, how a local id maps to a numeric id, and which
+    element holds the definition.
+
+    The parse is regex-over-XML in both languages. That is not how one would
+    choose to read OWL from scratch, but it is what MATLAB does, and a parser
+    that accepted a different set of terms would be a divergence that the
+    shared case table could not see.
+    """
+
+    #: URLs tried in order; the first that answers with a body wins.
+    owl_urls: tuple[str, ...] = ()
+    #: Prefix used to build the returned id, e.g. "EDAM" -> "EDAM:1929".
+    id_prefix: str = ""
+
+    _cache: dict[str, dict[str, Any]] | None = None
+
+    @classmethod
+    def _fetch_owl(cls) -> str:
+        import requests
+
+        for url in cls.owl_urls:
+            try:
+                resp = requests.get(url, timeout=60)
+                if resp.status_code == 200 and resp.text:
+                    return resp.text
+            except Exception:
+                continue
+        return ""
+
+    @classmethod
+    def _class_blocks(cls, owl: str) -> list[tuple[str, str]]:
+        """Override: yield (local_identifier, block_body) pairs."""
+        raise NotImplementedError
+
+    @classmethod
+    def _numeric_id(cls, local_id: str) -> str:
+        """Override: map a local identifier to its bare numeric id, or ''."""
+        raise NotImplementedError
+
+    @classmethod
+    def _definition(cls, content: str) -> str:
+        """Override: pull the definition out of a class block."""
+        return ""
+
+    @classmethod
+    def _synonyms(cls, content: str) -> list[str]:
+        return []
+
+    @classmethod
+    def _index(cls) -> dict[str, dict[str, Any]]:
+        """Return {"by_id": ..., "by_name": ...}, downloading once per process."""
+        if cls._cache is not None:
+            return cls._cache
+
+        owl = cls._fetch_owl()
+        by_id: dict[str, dict[str, Any]] = {}
+        by_name: dict[str, dict[str, Any]] = {}
+
+        for local_id, content in cls._class_blocks(owl):
+            numeric = cls._numeric_id(local_id)
+            if not numeric:
+                continue
+            label_match = re.search(r"<rdfs:label[^>]*>(.*?)</rdfs:label>", content, re.S)
+            label = _unescape_xml(label_match.group(1).strip()) if label_match else ""
+            if not label:
+                # Anonymous or unlabelled terms are skipped, as MATLAB does.
+                continue
+            term = {
+                "id": f"{cls.id_prefix}:{numeric}",
+                "numeric_id": numeric,
+                "name": label,
+                "definition": cls._definition(content),
+                "synonyms": cls._synonyms(content),
+            }
+            by_id.setdefault(numeric, term)
+            by_name.setdefault(label.lower(), term)
+
+        cls._cache = {"by_id": by_id, "by_name": by_name}
+        return cls._cache
+
+    @pydantic.validate_call
+    def lookup_term(self, term: str, prefix: str = "") -> Any:
+        from . import OntologyResult
+
+        index = self._index()
+        term = term.strip()
+        if re.match(r"^\d+$", term):
+            found = index["by_id"].get(term)
+        else:
+            found = index["by_name"].get(term.lower())
+        if not found:
+            return OntologyResult(prefix=self.id_prefix)
+        return OntologyResult(
+            id=found["id"],
+            name=found["name"],
+            prefix=self.id_prefix,
+            definition=found["definition"],
+            synonyms=list(found["synonyms"]),
+        )
+
+
+def _unescape_xml(text: str) -> str:
+    """The five predefined XML entities, matching MATLAB's unescapeXML."""
+    return (
+        text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+    )
+
+
+class EDAMProvider(_OWLTermProvider):
+    """EDAM bioinformatics ontology.
+
+    MATLAB equivalent: +ndi/+ontology/EDAM.m.
+
+    EDAM IRIs carry a sub-namespace -- format_1929, data_1234, operation_0004,
+    topic_0091 -- but the returned id drops it: MATLAB builds
+    `[ONTOLOGY_PREFIX ':' numeric_id]`, so both `EDAM:1929` and `format:1929`
+    resolve to `EDAM:1929`. The `format` prefix is an alias registered in
+    ontology_list.json, not a separate ontology.
+    """
+
+    name = "EDAM"
+    id_prefix = "EDAM"
+    owl_urls = ("https://raw.githubusercontent.com/edamontology/edamontology/main/EDAM_dev.owl",)
+    _IRI_BASE = "http://edamontology.org/"
+
+    _cache: dict[str, dict[str, Any]] | None = None
+
+    @classmethod
+    def _class_blocks(cls, owl: str) -> list[tuple[str, str]]:
+        pattern = (
+            r'<owl:Class\s+rdf:about="' + re.escape(cls._IRI_BASE) + r'([^"]+)">(.*?)</owl:Class>'
+        )
+        return re.findall(pattern, owl, re.S)
+
+    @classmethod
+    def _numeric_id(cls, local_id: str) -> str:
+        m = re.match(r"^(\w+)_(\d+)$", local_id)
+        return m.group(2) if m else ""
+
+    @classmethod
+    def _definition(cls, content: str) -> str:
+        m = re.search(
+            r"<oboInOwl:hasDefinition[^>]*>.*?<rdfs:label[^>]*>(.*?)</rdfs:label>.*?"
+            r"</oboInOwl:hasDefinition>",
+            content,
+            re.S,
+        )
+        if not m:
+            m = re.search(r"<obo:IAO_0000115[^>]*>(.*?)</obo:IAO_0000115>", content, re.S)
+        return _unescape_xml(m.group(1).strip()) if m else ""
+
+
+class IAOProvider(_OWLTermProvider):
+    """Information Artifact Ontology.
+
+    MATLAB equivalent: +ndi/+ontology/IAO.m.
+
+    Two URLs are tried in MATLAB's order. The obolibrary PURL is authoritative;
+    the GitHub raw copy is the fallback, and is what answers when the PURL is
+    unreachable.
+
+    IAO terms appear both as `owl:Class` and as `rdf:Description` blocks; the
+    latter are only taken when they carry an rdfs:label, matching MATLAB.
+    """
+
+    name = "IAO"
+    id_prefix = "IAO"
+    owl_urls = (
+        "http://purl.obolibrary.org/obo/iao.owl",
+        "https://raw.githubusercontent.com/information-artifact-ontology/IAO/master/iao.owl",
+    )
+
+    _cache: dict[str, dict[str, Any]] | None = None
+
+    @classmethod
+    def _class_blocks(cls, owl: str) -> list[tuple[str, str]]:
+        blocks = re.findall(
+            r"<owl:Class\s+rdf:about=['\"]([^'\"]*IAO_\d+[^'\"]*)['\"]\s*>(.*?)</owl:Class>",
+            owl,
+            re.S,
+        )
+        for about, content in re.findall(
+            r"<rdf:Description\s+rdf:about=['\"]([^'\"]*IAO_\d+[^'\"]*)['\"]\s*>"
+            r"(.*?)</rdf:Description>",
+            owl,
+            re.S,
+        ):
+            if "<rdfs:label" in content:
+                blocks.append((about, content))
+        return blocks
+
+    @classmethod
+    def _numeric_id(cls, local_id: str) -> str:
+        m = re.search(r"IAO_(\d+)", local_id)
+        return m.group(1) if m else ""
+
+    @classmethod
+    def _definition(cls, content: str) -> str:
+        m = re.search(r"<obo:IAO_0000115[^>]*>(.*?)</obo:IAO_0000115>", content, re.S)
+        return _unescape_xml(m.group(1).strip()) if m else ""
+
+    @classmethod
+    def _synonyms(cls, content: str) -> list[str]:
+        return [
+            _unescape_xml(t.strip())
+            for t in re.findall(
+                r"<oboInOwl:has(?:Exact|Related)Synonym[^>]*>(.*?)"
+                r"</oboInOwl:has(?:Exact|Related)Synonym>",
+                content,
+                re.S,
+            )
+        ]
+
+
+# ---------------------------------------------------------------------------
+# schema.org
+# ---------------------------------------------------------------------------
+
+
+class SchemaOrgProvider(OntologyProvider):
+    """Schema.org terms, via each term's own JSON-LD document.
+
+    MATLAB equivalent: +ndi/+ontology/SchemaOrg.m.
+
+    Not OLS-backed and not an OWL file: schema.org serves a JSON-LD document
+    per term at https://schema.org/<Term>, whose @graph holds that term plus
+    everything it references. The entry to read is the one whose @id matches
+    the term, in either the compact form (`schema:Person`) or the full IRI
+    (`https://schema.org/Person`) -- MATLAB checks for both, because the
+    response uses them interchangeably.
+
+    The id is the term as given, not a canonicalised form: MATLAB returns
+    `['schema:' term_name]`. `name` falls back to the term itself when the
+    document carries no rdfs:label, which is MATLAB's behaviour too.
+    """
+
+    name = "SchemaOrg"
+
+    _BASE_URL = "https://schema.org/"
+
+    @staticmethod
+    def _find_graph_entry(data: Any, compact: str, full: str) -> dict | None:
+        """Locate the @graph entry whose @id is the term, compact or full."""
+        candidates: list[Any] = []
+        if isinstance(data, dict):
+            graph = data.get("@graph")
+            if isinstance(graph, list):
+                candidates = graph
+            else:
+                candidates = [data]
+        elif isinstance(data, list):
+            candidates = data
+
+        for item in candidates:
+            if isinstance(item, dict) and item.get("@id") in (compact, full):
+                return item
+        return None
+
+    @staticmethod
+    def _by_keyword(item: dict, keyword: str) -> str:
+        """Read rdfs:label / rdfs:comment however the document spells the key."""
+        for key, value in item.items():
+            if keyword not in key.lower():
+                continue
+            if isinstance(value, str):
+                return value
+            if isinstance(value, dict):
+                inner = value.get("@value")
+                if isinstance(inner, str):
+                    return inner
+        return ""
+
+    @pydantic.validate_call
+    def lookup_term(self, term: str, prefix: str = "") -> Any:
+        from . import OntologyResult
+
+        term_name = term.strip()
+        if not term_name:
+            return OntologyResult(prefix="schema")
+
+        compact = f"schema:{term_name}"
+        full = f"https://schema.org/{term_name}"
+
+        try:
+            import requests
+
+            resp = requests.get(
+                f"{self._BASE_URL}{term_name}",
+                timeout=30,
+                headers={"Accept": "application/ld+json"},
+            )
+            resp.raise_for_status()
+            body = resp.text
+        except Exception:
+            return OntologyResult(prefix="schema")
+
+        # MATLAB checks the raw body for the @id before decoding, so a page
+        # that exists but describes something else is a miss rather than a
+        # partial result.
+        id_pattern = rf'"@id"\s*:\s*"(?:{re.escape(compact)}|{re.escape(full)})"'
+        if not re.search(id_pattern, body):
+            return OntologyResult(prefix="schema")
+
+        name = term_name
+        definition = ""
+        try:
+            item = self._find_graph_entry(resp.json(), compact, full)
+            if item:
+                label = self._by_keyword(item, "label")
+                if label:
+                    name = label
+                definition = self._by_keyword(item, "comment")
+        except Exception:
+            pass
+
+        return OntologyResult(id=compact, name=name, prefix="schema", definition=definition)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -652,5 +1026,11 @@ PROVIDER_REGISTRY.update(
         "PATO": PATOProvider,
         "PubChem": PubChemProvider,
         "EMPTY": EMPTYProvider,
+        "Uberon": UberonProvider,
+        "NCIT": NCITProvider,
+        "STATO": STATOProvider,
+        "EDAM": EDAMProvider,
+        "IAO": IAOProvider,
+        "SchemaOrg": SchemaOrgProvider,
     }
 )

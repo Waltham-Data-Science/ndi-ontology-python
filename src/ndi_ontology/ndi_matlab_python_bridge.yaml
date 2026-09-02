@@ -212,7 +212,9 @@ classes:
           - name: mappings
             type_python: "dict[str, str]"
         decision_log: >
-          Python implements this via _PREFIX_MAP dict and
+          Python implements this by reading ontology_list.json (see
+          _load_prefix_map; the _PREFIX_MAP literal was removed for
+          NDI-python#98) and
           _load_prefix_map(). Not exposed as separate public function.
           Documented for completeness.
 
@@ -499,63 +501,107 @@ providers:
 
   - name: Uberon
     matlab_path: "src/ndi/+ndi/+ontology/Uberon.m"
-    python_path: null
-    python_class: null
-    status: not_ported
-    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "UberonProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      OLS-backed. ontology_list.json already registers the prefix `Uberon`, so lookup('UBERON:...') resolves a prefix to a provider that does not exist and yields an empty result.
+      EXAMINED and PORTED against Uberon.m at 8e109b0 (2026-09-02), for
+      NDI-python#98.
+      OLS-backed, ontology 'uberon', prefix 'UBERON'. MATLAB sets only those
+      two parameters and defers to the shared preprocessLookupInput /
+      searchOLSAndPerformIRILookup helpers, so the Python subclass does too.
+
 
   - name: NCIT
     matlab_path: "src/ndi/+ndi/+ontology/NCIT.m"
-    python_path: null
-    python_class: null
-    status: not_ported
-    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "NCITProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      OLS-backed. ontology_list.json already registers the prefix `NCIT`, with the same silently-empty consequence as Uberon.
+      EXAMINED and PORTED against NCIT.m at 8e109b0 (2026-09-02), for
+      NDI-python#98.
+      OLS-backed, ontology 'ncit', prefix 'NCIT'. NOTE: MATLAB's shared case
+      table has no NCIT cases, so nothing cross-checks this provider's
+      parity; recorded as a known gap in test_shared_cases.py and better
+      fixed upstream by adding cases to ndi-ontology-matlab.
+
 
   - name: EDAM
     matlab_path: "src/ndi/+ndi/+ontology/EDAM.m"
-    python_path: null
-    python_class: null
-    status: not_ported
-    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "EDAMProvider"
+    inherits: "_OWLTermProvider"
+    status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      OLS-backed. Prefix `EDAM` and its alias `format` are absent from this repository's ontology_list.json and must be added with the provider.
+      EXAMINED and PORTED against EDAM.m at 8e109b0 (2026-09-02), for
+      NDI-python#98.
+      NOT OLS-backed: downloads EDAM_dev.owl and parses owl:Class blocks with a
+      regex, as MATLAB does. EDAM IRIs carry a sub-namespace (format_1929,
+      data_0006) but the returned id drops it -- MATLAB builds
+      [ONTOLOGY_PREFIX ':' numeric_id] -- so both EDAM:1929 and format:1929
+      resolve to EDAM:1929. Verified against the live OWL file: all three of
+      the table's EDAM cases produce MATLAB's expected id and name.
+
 
   - name: IAO
     matlab_path: "src/ndi/+ndi/+ontology/IAO.m"
-    python_path: null
-    python_class: null
-    status: not_ported
-    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "IAOProvider"
+    inherits: "_OWLTermProvider"
+    status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "6462c0f"
     sync_status: >
-      OLS-backed. Prefix `IAO` absent from this repository's ontology_list.json.
+      EXAMINED and PORTED against IAO.m at 6462c0f (2026-09-02), for
+      NDI-python#98.
+      NOT OLS-backed: downloads iao.owl, trying the obolibrary PURL first and the
+      GitHub raw copy second, in MATLAB's order. Terms appear as both
+      owl:Class and rdf:Description blocks; the latter count only when they
+      carry an rdfs:label, and unlabelled terms are skipped, matching MATLAB.
+      Verified against the live OWL file (via the fallback URL): all four of
+      the table's IAO cases match.
+
 
   - name: STATO
     matlab_path: "src/ndi/+ndi/+ontology/STATO.m"
-    python_path: null
-    python_class: null
-    status: not_ported
-    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "STATOProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "4ce6ac1"
     sync_status: >
-      OLS-backed. Prefix `STATO` absent from this repository's ontology_list.json.
+      EXAMINED and PORTED against STATO.m at 4ce6ac1 (2026-09-02), for
+      NDI-python#98.
+      OLS-backed, ontology 'stato', prefix 'STATO'.
+
 
   - name: SchemaOrg
     matlab_path: "src/ndi/+ndi/+ontology/SchemaOrg.m"
-    python_path: null
-    python_class: null
-    status: not_ported
-    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "SchemaOrgProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "9ec3f2b"
     sync_status: >
-      Not OLS-backed: navigates schema.org's JSON-LD @graph (see 9ec3f2b). Prefix `schema` absent from this repository's ontology_list.json.
+      EXAMINED and PORTED against SchemaOrg.m at 9ec3f2b (2026-09-02), for
+      NDI-python#98.
+      Neither OLS nor an OWL file: fetches https://schema.org/<Term> as JSON-LD and
+      locates the @graph entry whose @id is the term, in either the compact
+      form (schema:Person) or the full IRI -- MATLAB checks both because the
+      response uses them interchangeably (see 9ec3f2b, which fixed exactly
+      this). The id is the term as given, not canonicalised, and name falls
+      back to the term when the document carries no rdfs:label.
+
 
 # =========================================================================
 # Data files
@@ -567,13 +613,14 @@ data_files:
     python_path: "ndi_ontology/ndi_common/ontology/ontology_list.json"
     matlab_last_sync_hash: "5c75ead"
     sync_status: >
-      OUT OF SYNC, knowingly. This copy carries 17 prefixes; the MATLAB copy
-      at 5c75ead carries 22. Missing: EDAM, format, IAO, STATO, schema. The
-      file moved into this repository unchanged, so that the split is a move
-      rather than a move plus a content change; syncing it belongs with the
-      providers that make the new prefixes resolvable, in NDI-python#98.
-      Two prefixes are worse than missing: Uberon and NCIT are present here
-      with no provider behind them.
+      IN SYNC as of 2026-09-02: copied from ndi-ontology-matlab at 5c75ead,
+      22 prefixes, alongside the six providers that make them all resolvable
+      (NDI-python#98). Previously 17, and two of those -- Uberon and NCIT --
+      were registered with no provider behind them, so those lookups resolved
+      a prefix to nothing and returned an empty result. Every registered
+      prefix now has a provider, and
+      test_every_registered_prefix_has_a_provider fails if that stops being
+      true.
 
   - name: NDIC.txt
     matlab_path: "src/ndi/ndi_common/controlled_vocabulary/NDIC.txt"

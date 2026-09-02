@@ -111,42 +111,50 @@ class OntologyResult:
 # ---------------------------------------------------------------------------
 
 
-# Map prefixes to provider class names (case-insensitive)
-_PREFIX_MAP: dict[str, str] = {
-    "CL": "CL",
-    "OM": "OM",
-    "NDIC": "NDIC",
-    "NCIm": "NCIm",
-    "CHEBI": "CHEBI",
-    "NCBITaxon": "NCBITaxon",
-    "taxonomy": "NCBITaxon",
-    "WBStrain": "WBStrain",
-    "SNOMED": "SNOMED",
-    "RRID": "RRID",
-    "EFO": "EFO",
-    "PATO": "PATO",
-    "PubChem": "PubChem",
-    "EMPTY": "EMPTY",
-}
+#: Cached prefix -> ontology-name map, read from ontology_list.json.
+_prefix_map_cache: dict[str, str] | None = None
 
 
 def _load_prefix_map() -> dict[str, str]:
-    """Load prefix mappings from ontology_list.json if available."""
-    try:
-        from .paths import ONTOLOGY_LIST_FILE
+    """Return the prefix -> ontology name map from ontology_list.json.
 
-        json_path = ONTOLOGY_LIST_FILE
-        if json_path.exists():
-            with open(json_path) as f:
-                data = json.load(f)
-            for mapping in data.get("prefix_ontology_mappings", []):
-                prefix = mapping.get("prefix", "")
-                name = mapping.get("ontology_name", "")
-                if prefix and name:
-                    _PREFIX_MAP[prefix] = name
-    except Exception:
-        pass
-    return _PREFIX_MAP
+    ontology_list.json is the single source. There used to be a fourteen-entry
+    literal here that the JSON was merged *into*, and the two were free to
+    disagree: the JSON registered `Uberon` and `NCIT` while PROVIDER_REGISTRY
+    had neither, so `lookup('UBERON:0000948')` resolved a prefix to a provider
+    that did not exist and answered with an empty result. Registering an
+    ontology now means editing this file and adding a provider class -- which
+    is what NDI-python#98 asked for.
+
+    A missing or unreadable file raises rather than silently yielding an empty
+    map. The file ships inside the package, so its absence is a broken install,
+    and an empty map would turn every lookup into a silent miss -- the failure
+    mode this namespace has already produced four times.
+    """
+    global _prefix_map_cache
+    if _prefix_map_cache is not None:
+        return _prefix_map_cache
+
+    from .paths import ONTOLOGY_LIST_FILE
+
+    with open(ONTOLOGY_LIST_FILE) as f:
+        data = json.load(f)
+
+    mapping: dict[str, str] = {}
+    for entry in data.get("prefix_ontology_mappings", []):
+        prefix = entry.get("prefix", "")
+        ontology_name = entry.get("ontology_name", "")
+        if prefix and ontology_name:
+            mapping[prefix] = ontology_name
+
+    if not mapping:
+        raise RuntimeError(
+            f"no prefix mappings in {ONTOLOGY_LIST_FILE}; the packaged ontology "
+            f"registry is empty or malformed, so every lookup would miss"
+        )
+
+    _prefix_map_cache = mapping
+    return _prefix_map_cache
 
 
 # ---------------------------------------------------------------------------
