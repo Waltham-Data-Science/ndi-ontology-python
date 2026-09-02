@@ -153,7 +153,21 @@ pip install -e ".[dev]"
 black src/ tests/ && ruff check src/ tests/ && pytest tests/ -q
 ```
 
-See [AGENTS.md](AGENTS.md) for the porting contract.
+### Porting contract
+
+Anyone (or anything) changing this code should read, in order:
+
+| | |
+|---|---|
+| [`AGENTS.md`](AGENTS.md) | the workflow for this repository, including how to add a provider |
+| [`docs/developer_notes/PYTHON_PORTING_GUIDE.md`](docs/developer_notes/PYTHON_PORTING_GUIDE.md) | the MATLAB→Python protocol: naming, Pydantic, sync hashes |
+| [`docs/developer_notes/ndi_xlang_principles.md`](docs/developer_notes/ndi_xlang_principles.md) | cross-language rules: indexing, counting, hard-fail semantics |
+| [`docs/developer_notes/ndi_matlab_python_bridge.yaml`](docs/developer_notes/ndi_matlab_python_bridge.yaml) | the spec for bridge files themselves |
+| [`src/ndi_ontology/ndi_matlab_python_bridge.yaml`](src/ndi_ontology/ndi_matlab_python_bridge.yaml) | **the contract for this namespace** — every class, provider, data file and test, mapped to its MATLAB source with a sync hash |
+
+The bridge file is the one to read first when porting. It records which providers have actually
+been examined against their MATLAB source (most have not, and say so) rather than implying a
+parity that was never checked.
 
 ## License
 

@@ -14,6 +14,17 @@ project_metadata:
     are relative to ndi-ontology-matlab unless the entry says otherwise.
     Examined against ndi-ontology-matlab at 984abef (2026-09-02).
 
+  matlab_examined_hash: "984abef"
+  matlab_examined_date: "2026-09-02"
+  examination_note: >
+    Per the porting guide's section 3, each entry records
+    matlab_last_sync_hash: the short hash of the MATLAB file the Python side
+    was actually written against. Obtain it with
+    `git log -1 --format="%h" -- <path>` in ndi-ontology-matlab.
+    Entries whose Python side predates the MATLAB extraction carry
+    sync_status instead of a hash, and say so rather than claiming a sync
+    that never happened. Do not fill a hash in without reading the .m file.
+
   package_name_divergence:
     matlab: "ndi.ontology"
     python_distribution: "ndi-ontology"
@@ -52,6 +63,14 @@ classes:
     python_path: "ndi_ontology/__init__.py"
     python_class: "module-level functions + OntologyResult"
     inherits: ""
+    matlab_last_sync_hash: "9d9b4e1"
+    sync_status: >
+      Interface examined against ontology.m at 9d9b4e1 (2026-09-02). The
+      lookup/clearCache surface matches. Not a full behavioural sync: MATLAB
+      errors on an unresolvable prefix where Python returns an empty
+      OntologyResult, and MATLAB implements 19 ontology classes to Python's
+      13. Deferred: the six unported providers, the unknown-prefix error
+      path, and the duplicated prefix map -- all NDI-python#98.
 
     properties:
       # MATLAB has hidden Constant properties for file paths
@@ -229,49 +248,295 @@ classes:
 # Provider classes
 # =========================================================================
 # MATLAB implements each ontology as a class in +ndi/+ontology/<Name>.m.
-# Python implements each as a <Name>Provider class in providers.py,
-# registered in PROVIDER_REGISTRY and dispatched by prefix.
+# Python implements each as a <Name>Provider in providers.py, registered in
+# PROVIDER_REGISTRY and dispatched by prefix.
 #
 # CORRECTION (2026-09-02): earlier revisions of this file claimed MATLAB
 # covered only 3 ontologies (NDIC, UBERON, NCIm) through scattered
-# +ndi/+database/+fun functions, and that ndi.ontology.lookup() was
-# "planned but does not yet exist". Both statements described NDI-matlab
-# before the extraction. ndi-ontology-matlab implements ndi.ontology.lookup
-# and 19 ontology classes today, so the Python port is behind MATLAB here,
-# not ahead of it.
+# +ndi/+database/+fun functions, and that ndi.ontology.lookup() was "planned
+# but does not yet exist". Both statements described NDI-matlab before the
+# extraction. ndi-ontology-matlab implements ndi.ontology.lookup and 19
+# ontology classes today, so the Python port is behind MATLAB here, not
+# ahead of it.
 #
-# Ported — Python provider <-> MATLAB class:
-#   CLProvider        -> +ndi/+ontology/CL.m
-#   CHEBIProvider     -> +ndi/+ontology/CHEBI.m
-#   PATOProvider      -> +ndi/+ontology/PATO.m
-#   EFOProvider       -> +ndi/+ontology/EFO.m
-#   SNOMEDProvider    -> +ndi/+ontology/SNOMED.m
-#   OMProvider        -> +ndi/+ontology/OM.m
-#   NDICProvider      -> +ndi/+ontology/NDIC.m
-#   NCImProvider      -> +ndi/+ontology/NCIm.m
-#   NCBITaxonProvider -> +ndi/+ontology/NCBITaxon.m
-#   WBStrainProvider  -> +ndi/+ontology/WBStrain.m
-#   RRIDProvider      -> +ndi/+ontology/RRID.m
-#   PubChemProvider   -> +ndi/+ontology/PubChem.m
-#   EMPTYProvider     -> +ndi/+ontology/EMPTY.m
-#
-# NOT YET PORTED — MATLAB class exists, Python provider does not.
-# Tracked by NDI-python#98:
-#   (missing)         -> +ndi/+ontology/Uberon.m
-#   (missing)         -> +ndi/+ontology/NCIT.m
-#   (missing)         -> +ndi/+ontology/EDAM.m
-#   (missing)         -> +ndi/+ontology/IAO.m
-#   (missing)         -> +ndi/+ontology/STATO.m
-#   (missing)         -> +ndi/+ontology/SchemaOrg.m
-#
-# KNOWN DEFECT carried over unchanged by the repository split:
-# ontology_list.json registers the prefixes `Uberon` and `NCIT`, but
-# PROVIDER_REGISTRY has no entry for either, and lookup() returns an empty
-# OntologyResult for an unresolvable provider rather than raising. So
-# lookup('UBERON:0000948') silently yields nothing where MATLAB errors.
-# The prefix map is also maintained twice — a literal _PREFIX_MAP in
-# __init__.py merged with ontology_list.json — which is what allowed the
-# two to disagree. Both are the first item of NDI-python#98.
+# Every Python provider below was written before the MATLAB extraction, as
+# part of NDI-python's ad-hoc ontology port. None has been read against the
+# .m file it claims to mirror. Following NDI-python#90's convention, they are
+# marked not-examined rather than given a sync hash they have not earned:
+# matlab_last_sync_hash names the MATLAB revision to examine, and sync_status
+# says plainly that the examination has not happened. The first agent to
+# touch a provider should read its .m file and correct its entry.
+providers:
+
+  - name: CL
+    matlab_path: "src/ndi/+ndi/+ontology/CL.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "CLProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against CL.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: CHEBI
+    matlab_path: "src/ndi/+ndi/+ontology/CHEBI.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "CHEBIProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against CHEBI.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: PATO
+    matlab_path: "src/ndi/+ndi/+ontology/PATO.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "PATOProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against PATO.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: EFO
+    matlab_path: "src/ndi/+ndi/+ontology/EFO.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "EFOProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against EFO.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: SNOMED
+    matlab_path: "src/ndi/+ndi/+ontology/SNOMED.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "SNOMEDProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against SNOMED.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: OM
+    matlab_path: "src/ndi/+ndi/+ontology/OM.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "OMProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against OM.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: NDIC
+    matlab_path: "src/ndi/+ndi/+ontology/NDIC.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "NDICProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_last_sync_hash: "73e71fc"
+    sync_status: >
+      NOT EXAMINED against NDIC.m at 73e71fc. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: NCIm
+    matlab_path: "src/ndi/+ndi/+ontology/NCIm.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "NCImProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against NCIm.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: NCBITaxon
+    matlab_path: "src/ndi/+ndi/+ontology/NCBITaxon.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "NCBITaxonProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against NCBITaxon.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: WBStrain
+    matlab_path: "src/ndi/+ndi/+ontology/WBStrain.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "WBStrainProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against WBStrain.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: RRID
+    matlab_path: "src/ndi/+ndi/+ontology/RRID.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "RRIDProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against RRID.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: PubChem
+    matlab_path: "src/ndi/+ndi/+ontology/PubChem.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "PubChemProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against PubChem.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  - name: EMPTY
+    matlab_path: "src/ndi/+ndi/+ontology/EMPTY.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "EMPTYProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT EXAMINED against EMPTY.m at 8e109b0. Python implementation predates
+      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      never checked against this MATLAB class.
+
+  # --- Not ported: MATLAB class exists, Python provider does not ---------
+  # Tracked by NDI-python#98. Adding one means: the provider class here, the
+  # prefix entries in ontology_list.json (including aliases), tests for
+  # lookup-by-id, lookup-by-name and not-found, and this entry updated.
+
+  - name: Uberon
+    matlab_path: "src/ndi/+ndi/+ontology/Uberon.m"
+    python_path: null
+    python_class: null
+    status: not_ported
+    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      OLS-backed. ontology_list.json already registers the prefix `Uberon`, so lookup('UBERON:...') resolves a prefix to a provider that does not exist and yields an empty result.
+
+  - name: NCIT
+    matlab_path: "src/ndi/+ndi/+ontology/NCIT.m"
+    python_path: null
+    python_class: null
+    status: not_ported
+    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      OLS-backed. ontology_list.json already registers the prefix `NCIT`, with the same silently-empty consequence as Uberon.
+
+  - name: EDAM
+    matlab_path: "src/ndi/+ndi/+ontology/EDAM.m"
+    python_path: null
+    python_class: null
+    status: not_ported
+    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      OLS-backed. Prefix `EDAM` and its alias `format` are absent from this repository's ontology_list.json and must be added with the provider.
+
+  - name: IAO
+    matlab_path: "src/ndi/+ndi/+ontology/IAO.m"
+    python_path: null
+    python_class: null
+    status: not_ported
+    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    matlab_last_sync_hash: "6462c0f"
+    sync_status: >
+      OLS-backed. Prefix `IAO` absent from this repository's ontology_list.json.
+
+  - name: STATO
+    matlab_path: "src/ndi/+ndi/+ontology/STATO.m"
+    python_path: null
+    python_class: null
+    status: not_ported
+    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    matlab_last_sync_hash: "4ce6ac1"
+    sync_status: >
+      OLS-backed. Prefix `STATO` absent from this repository's ontology_list.json.
+
+  - name: SchemaOrg
+    matlab_path: "src/ndi/+ndi/+ontology/SchemaOrg.m"
+    python_path: null
+    python_class: null
+    status: not_ported
+    tracked_by: "Waltham-Data-Science/NDI-python#98"
+    matlab_last_sync_hash: "9ec3f2b"
+    sync_status: >
+      Not OLS-backed: navigates schema.org's JSON-LD @graph (see 9ec3f2b). Prefix `schema` absent from this repository's ontology_list.json.
+
+# =========================================================================
+# Data files
+# =========================================================================
+data_files:
+
+  - name: ontology_list.json
+    matlab_path: "src/ndi/ndi_common/ontology/ontology_list.json"
+    python_path: "ndi_ontology/ndi_common/ontology/ontology_list.json"
+    matlab_last_sync_hash: "5c75ead"
+    sync_status: >
+      OUT OF SYNC, knowingly. This copy carries 17 prefixes; the MATLAB copy
+      at 5c75ead carries 22. Missing: EDAM, format, IAO, STATO, schema. The
+      file moved into this repository unchanged, so that the split is a move
+      rather than a move plus a content change; syncing it belongs with the
+      providers that make the new prefixes resolvable, in NDI-python#98.
+      Two prefixes are worse than missing: Uberon and NCIT are present here
+      with no provider behind them.
+
+  - name: NDIC.txt
+    matlab_path: "src/ndi/ndi_common/controlled_vocabulary/NDIC.txt"
+    python_path: "ndi_ontology/ndi_common/controlled_vocabulary/NDIC.txt"
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      In sync with 8e109b0: 27 entries, tab-separated, identical content.
+      NDI-matlab does not carry this file at all -- it left with the ontology
+      extraction -- so ndi-ontology-matlab is its only MATLAB home.
+
+# =========================================================================
+# Tests
+# =========================================================================
+tests:
+
+  - matlab_path: "tests/+ndi/+unittest/+ontology/TestOntologyLookup.m"
+    python_path: "tests/matlab_tests/test_ontology.py"
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      Ported before the extraction; not re-read against TestOntologyLookup.m
+      at 8e109b0.
+
+  - matlab_path: "tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json"
+    python_path: null
+    matlab_last_sync_hash: "8e109b0"
+    sync_status: >
+      NOT CONSUMED. This is a language-neutral case table -- prefix, input,
+      expected id, expected name -- which both implementations could read
+      directly, giving cross-language parity without artifact plumbing.
+      Wiring it up is the cheapest symmetry win available here and should be
+      done alongside NDI-python#98.
 
   # --- Supporting modules with MATLAB equivalents ---
 supporting_modules:
@@ -279,6 +544,7 @@ supporting_modules:
   - name: name2variableName
     matlab_path: "src/ndi/+ndi/+ontology/name2variableName.m"
     python_path: "ndi_ontology/name_utils.py"
+    matlab_last_sync_hash: "73e71fc"
     python_name: "name2variableName (alias: name_to_variable_name)"
     decision_log: >
       ndi-ontology-matlab carries its own copy of name2variableName, whose
@@ -293,6 +559,7 @@ supporting_modules:
   - name: ontologyToolboxDir
     matlab_path: "src/ndi/+ndi/ontologyToolboxDir.m"
     python_path: "ndi_ontology/paths.py"
+    matlab_last_sync_hash: "73e71fc"
     python_name: "ontologyToolboxDir (plus module constants)"
     decision_log: >
       MATLAB resolves data files relative to the folder holding the +ndi
@@ -314,6 +581,7 @@ functions:
     type: function
     matlab_path: "src/ndi/+ndi/ontology.m (static method)"
     python_path: "ndi_ontology/__init__.py"
+    matlab_last_sync_hash: "9d9b4e1"
     input_arguments:
       - name: lookup_string
         type_matlab: "char"
@@ -329,6 +597,7 @@ functions:
     type: function
     matlab_path: "src/ndi/+ndi/ontology.m (static method)"
     python_path: "ndi_ontology/__init__.py"
+    matlab_last_sync_hash: "9d9b4e1"
     input_arguments: []
     output_arguments: []
     decision_log: >
