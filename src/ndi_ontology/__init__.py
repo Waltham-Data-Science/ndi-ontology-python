@@ -33,6 +33,30 @@ from .providers import PROVIDER_REGISTRY
 # ---------------------------------------------------------------------------
 
 
+class NDIOntologyLookupError(Exception):
+    """A lookup did not resolve to a term.
+
+    MATLAB's ndi.ontology.lookup raises on every failure -- an unknown prefix,
+    a term that is not in the ontology, an API that did not answer -- with
+    assorted identifiers (ndi:ontology:NDIC:IDNotFound,
+    ndi:ontology:EDAM:LookupFailed, and so on) that callers catch as one
+    MException. This is that single type.
+
+    It replaces an empty OntologyResult, which could not be told apart from a
+    resolved term with blank fields and, worse, was returned for a throttled
+    request as readily as for a term that genuinely does not exist. Four of
+    the defects found while porting this namespace reached production behind
+    exactly that ambiguity: three providers returning nothing because their
+    data source 404'd or their query was malformed, and a cache that made a
+    transient failure permanent. Each was invisible because "no result" was a
+    valid-looking answer.
+
+    The message names the lookup string and what went wrong. The originating
+    error, when there is one, is chained (`raise ... from`), so a transport
+    failure is still diagnosable even though it is not separately typed.
+    """
+
+
 class OntologyResult:
     """Result from an ontology lookup.
 
@@ -177,8 +201,16 @@ def lookup(lookup_string: str) -> OntologyResult:
 
     Returns:
         OntologyResult with id, name, prefix, definition, synonyms.
+
+    Raises:
+        NDIOntologyLookupError: if the string carries no prefix, the prefix is
+            not registered, the term is not in the ontology, or the provider
+            could not answer. MATLAB raises in all four cases; this is the
+            single Python type standing in for its assorted identifiers.
     """
     if lookup_string == "clear":
+        # MATLAB's clearCache calls ndi.ontology.lookup('clear'); the sentinel
+        # is not a lookup and does not raise.
         _lookup_cache.clear()
         return OntologyResult()
 
@@ -188,11 +220,12 @@ def lookup(lookup_string: str) -> OntologyResult:
 
     # Parse prefix
     if ":" not in lookup_string:
-        return OntologyResult()
+        raise NDIOntologyLookupError(
+            f"{lookup_string!r} has no ontology prefix; expected 'PREFIX:term'"
+        )
 
     prefix, remainder = lookup_string.split(":", 1)
 
-    # Load prefix map
     prefix_map = _load_prefix_map()
 
     # Case-insensitive prefix match
@@ -203,28 +236,39 @@ def lookup(lookup_string: str) -> OntologyResult:
             break
 
     if provider_name is None:
-        return OntologyResult()
+        raise NDIOntologyLookupError(
+            f"unknown ontology prefix {prefix!r} in {lookup_string!r}; "
+            f"known prefixes: {', '.join(sorted(prefix_map))}"
+        )
 
-    # Get provider
     provider_cls = PROVIDER_REGISTRY.get(provider_name)
     if provider_cls is None:
-        return OntologyResult()
+        # A prefix registered in ontology_list.json with no provider behind it.
+        # test_every_registered_prefix_has_a_provider exists to stop this
+        # reaching a user, so treat it as the packaging error it is.
+        raise NDIOntologyLookupError(
+            f"ontology {provider_name!r} is registered for prefix {prefix!r} but "
+            f"has no provider class; this is a defect in ndi_ontology, not in "
+            f"{lookup_string!r}"
+        )
 
     provider = provider_cls()
     try:
         result = provider.lookup_term(remainder, prefix)
-    except Exception:
-        result = OntologyResult()
+    except Exception as exc:
+        # Providers answer "not found" with an empty result and let genuine
+        # errors escape. Chain the original so a transport failure stays
+        # diagnosable even though it is not separately typed.
+        raise NDIOntologyLookupError(f"lookup of {lookup_string!r} failed: {exc}") from exc
 
-    # Cache successes only. An empty result here is not a fact about the
-    # ontology -- the providers answer a timeout or a 429 from a throttling
-    # API with exactly the same empty OntologyResult they use for "term not
-    # found" (see OLSProvider._search_ols, which ends `except Exception:
-    # return OntologyResult()`). Caching it turns one transient blip into a
-    # permanent wrong answer for that term for the life of the process, with
-    # no way to retry short of clearCache().
-    # MATLAB cannot have this bug: a failed lookup raises, so it never
-    # reaches the cache write at ontology.m:330-336.
+    if not result:
+        raise NDIOntologyLookupError(f"{lookup_string!r} not found in ontology {provider_name}")
+
+    # Only resolved terms reach here now, so the cache cannot hold a failure --
+    # the same guarantee MATLAB gets from raising before its cache write at
+    # ontology.m:330-336. The `if result` guard is kept as a belt-and-braces
+    # against a provider returning something falsy through a path that does not
+    # raise.
     if result:
         if len(_lookup_cache) >= _CACHE_MAX:
             # Remove oldest entry
@@ -243,4 +287,4 @@ def clearCache() -> None:
     _lookup_cache.clear()
 
 
-__all__ = ["OntologyResult", "lookup", "clearCache"]
+__all__ = ["NDIOntologyLookupError", "OntologyResult", "lookup", "clearCache"]

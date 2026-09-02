@@ -17,7 +17,12 @@ Mocked tests run without network.
 import pytest
 import requests
 
-from ndi_ontology import OntologyResult, clearCache, lookup
+from ndi_ontology import (
+    NDIOntologyLookupError,
+    OntologyResult,
+    clearCache,
+    lookup,
+)
 
 # ---------------------------------------------------------------------------
 # Network availability check
@@ -114,33 +119,27 @@ class TestOntologyLookupMocked:
     Tests lookup() behavior without requiring network access.
     """
 
-    def test_lookup_returns_ontology_result(self):
-        """lookup() always returns an OntologyResult object.
+    def test_a_resolved_lookup_returns_an_ontology_result(self):
+        """A lookup that resolves returns an OntologyResult.
 
         MATLAB equivalent: TestOntologyLookup.testLookupReturnType
+
+        NDIC reads a file that ships inside the package, so this holds with no
+        network -- and it is the only provider for which that is true.
         """
-        # Looking up a term with no network will return an empty result
-        # (providers catch exceptions and return empty OntologyResult)
-        result = lookup("EMPTY:anything")
+        result = lookup("NDIC:1")
         assert isinstance(result, OntologyResult)
+        assert result.id and result.name
 
-    def test_lookup_no_colon_returns_empty(self):
-        """lookup() returns empty result for strings without colon.
+    def test_lookup_no_colon_raises(self):
+        """MATLAB equivalent: TestOntologyLookup (edge case), which errors."""
+        with pytest.raises(NDIOntologyLookupError):
+            lookup("no_colon_here")
 
-        MATLAB equivalent: TestOntologyLookup (edge case)
-        """
-        result = lookup("no_colon_here")
-        assert isinstance(result, OntologyResult)
-        assert not result  # falsy for empty result
-
-    def test_lookup_unknown_prefix_returns_empty(self):
-        """lookup() returns empty result for unknown prefix.
-
-        MATLAB equivalent: TestOntologyLookup (edge case)
-        """
-        result = lookup("UNKNOWNPREFIX:12345")
-        assert isinstance(result, OntologyResult)
-        assert not result
+    def test_lookup_unknown_prefix_raises(self):
+        """MATLAB equivalent: TestOntologyLookup (edge case), which errors."""
+        with pytest.raises(NDIOntologyLookupError):
+            lookup("UNKNOWNPREFIX:12345")
 
     def test_lookup_clear_cache(self):
         """lookup('clear') clears the internal cache.

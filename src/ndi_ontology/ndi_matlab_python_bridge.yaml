@@ -65,12 +65,19 @@ classes:
     inherits: ""
     matlab_last_sync_hash: "9d9b4e1"
     sync_status: >
-      Interface examined against ontology.m at 9d9b4e1 (2026-09-02). The
-      lookup/clearCache surface matches. Not a full behavioural sync: MATLAB
-      errors on an unresolvable prefix where Python returns an empty
-      OntologyResult, and MATLAB implements 19 ontology classes to Python's
-      13. Deferred: the six unported providers, the unknown-prefix error
-      path, and the duplicated prefix map -- all NDI-python#98.
+      Interface examined against ontology.m at 9d9b4e1 (2026-09-02), and now
+      behaviourally synced as well: all 19 ontology classes are ported, the
+      prefix map is single-sourced from ontology_list.json, and lookup()
+      raises NDIOntologyLookupError where MATLAB raises, rather than returning
+      an empty OntologyResult. NDI-python#98 is closed.
+      One deliberate difference in shape, not behaviour: MATLAB raises
+      assorted identifiers (ndi:ontology:NDIC:IDNotFound,
+      ndi:ontology:EDAM:LookupFailed, ...) that callers catch as one
+      MException; Python raises one type for all of them, with the originating
+      error chained so a transport failure stays diagnosable. Providers keep
+      returning an empty result internally for "not found"; lookup() is where
+      that becomes the raise, so the public contract matches MATLAB while the
+      provider protocol stays simple to test.
 
     properties:
       # MATLAB has hidden Constant properties for file paths
