@@ -602,6 +602,33 @@ tests:
       NDI-python#98, so the run doubles as a progress meter for the port.
 
 # =========================================================================
+# Caching
+# =========================================================================
+caching:
+  matlab: "lookupCache containers.Map, size-limited, keyed by lookup string"
+  python: "_lookup_cache dict, size-limited (_CACHE_MAX), keyed by lookup string"
+  decision_log: >
+    Same shape, but MATLAB cannot cache a failure and Python could. MATLAB's
+    lookup raises on a failed lookup, so control never reaches the cache write
+    at ontology.m:330-336 -- only successes are ever stored. Python returned an
+    empty OntologyResult instead of raising and cached it unconditionally, so
+    one timeout or one 429 from a throttling API became a permanent wrong
+    answer for that term for the life of the process, unreachable by anything
+    short of clearCache().
+    That is worse than it sounds because the providers cannot distinguish
+    transport failure from "not found": OLSProvider._search_ols ends
+    `except Exception: return OntologyResult()`, so a throttled request and a
+    genuinely absent term produce the same value, and the cache then makes the
+    wrong one permanent.
+    FIXED 2026-09-02: only truthy results are cached. This does not close the
+    underlying gap -- Python still returns empty where MATLAB raises, which is
+    NDI-python#98's first item -- but it stops a transient failure from
+    outliving the request that caused it.
+    Found while diagnosing two shared-table cases (CL:cell, OM:Acidity) that
+    failed one CI run after passing the two before it, in a run that took
+    twice as long: OLS was throttling a 46-case burst.
+
+# =========================================================================
 # Symmetry
 # =========================================================================
 symmetry:

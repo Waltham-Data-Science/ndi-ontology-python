@@ -172,12 +172,21 @@ def lookup(lookup_string: str) -> OntologyResult:
     except Exception:
         result = OntologyResult()
 
-    # ndi_cache (with eviction)
-    if len(_lookup_cache) >= _CACHE_MAX:
-        # Remove oldest entry
-        oldest = next(iter(_lookup_cache))
-        del _lookup_cache[oldest]
-    _lookup_cache[lookup_string] = result
+    # Cache successes only. An empty result here is not a fact about the
+    # ontology -- the providers answer a timeout or a 429 from a throttling
+    # API with exactly the same empty OntologyResult they use for "term not
+    # found" (see OLSProvider._search_ols, which ends `except Exception:
+    # return OntologyResult()`). Caching it turns one transient blip into a
+    # permanent wrong answer for that term for the life of the process, with
+    # no way to retry short of clearCache().
+    # MATLAB cannot have this bug: a failed lookup raises, so it never
+    # reaches the cache write at ontology.m:330-336.
+    if result:
+        if len(_lookup_cache) >= _CACHE_MAX:
+            # Remove oldest entry
+            oldest = next(iter(_lookup_cache))
+            del _lookup_cache[oldest]
+        _lookup_cache[lookup_string] = result
 
     return result
 

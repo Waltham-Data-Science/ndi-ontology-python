@@ -145,6 +145,31 @@ def _as_param(case: dict):
     return pytest.param(case, marks=marks)
 
 
+# Backoff for a success case that comes back empty. The providers answer a
+# transport failure -- a timeout, or a 429 from an API that is throttling a
+# 46-case burst -- with the same empty OntologyResult they use for "term not
+# found", so the suite cannot tell the two apart from the value alone.
+# Untreated, that reports throttling as a parity mismatch: CL:cell and
+# OM:Acidity failed one CI run after passing the two before it, on a change
+# that touched only the numeric-id branch, in a run that took twice as long
+# as its predecessor.
+# Retrying separates them without weakening anything. A provider that is
+# genuinely wrong returns empty on every attempt and still fails -- EMPTY did,
+# on every attempt, for as long as its URL 404'd.
+RETRY_DELAYS_S = (2.0, 5.0, 10.0)
+
+
+def _lookup_expecting_success(lookup_string: str):
+    """lookup(), retried while the result is empty."""
+    result = lookup(lookup_string)
+    for delay in RETRY_DELAYS_S:
+        if result:
+            break
+        time.sleep(delay)
+        result = lookup(lookup_string)
+    return result
+
+
 def _case_id(case: dict) -> str:
     outcome = "ok" if case.get("should_succeed") else "fail"
     return f"{case.get('ontology', '?')}-{outcome}-{case.get('lookup_string', '?')}"
@@ -178,7 +203,7 @@ def test_matlab_case_table(case: dict) -> None:
         time.sleep(INTER_CASE_DELAY_S)
 
     if case["should_succeed"]:
-        result = lookup(lookup_string)
+        result = _lookup_expecting_success(lookup_string)
         assert result.id == case["expected_id"], (
             f"id mismatch for {lookup_string!r}: "
             f"expected {case['expected_id']!r}, got {result.id!r}"
