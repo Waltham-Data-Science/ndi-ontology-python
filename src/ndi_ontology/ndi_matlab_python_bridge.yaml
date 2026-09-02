@@ -105,17 +105,44 @@ classes:
             type_matlab: "char"
             type_python: "str"
         output_arguments:
-          - name: result
-            type_matlab: "struct with id, name, definition, synonyms, shortName"
-            type_python: "OntologyResult"
+          - name: "[id, name, prefix, definition, synonyms, shortName]"
+            type_matlab: "6 separate output arguments (char, char, char, char, cell, char)"
+            type_python: "OntologyResult (one object, six attributes)"
+        return_shape_divergence: true
         decision_log: >
-          Functional match. MATLAB returns a struct; Python returns an
-          OntologyResult object with the same fields (id, name, prefix,
-          definition, synonyms, short_name). Python uses a prefix-based
-          dispatcher pattern routing to provider classes; MATLAB uses
-          static methods on the ontology class. Both support the same
-          'prefix:id' format. Uses @pydantic.validate_call.
-          Synchronized 2026-03-13.
+          CORRECTED 2026-09-02. The previous entry read "MATLAB returns a
+          struct with id, name, definition, synonyms, shortName". That is
+          wrong twice over: ontology.m:125 declares
+          `[id, name, prefix, definition, synonyms, shortName] = lookup(...)`,
+          so MATLAB returns SIX separate output arguments, not a struct, and
+          the old list omitted `prefix`. The struct exists only as the
+          internal cache entry (ontology.m:330-336), never as a return value.
+          MATLAB's own TestOntologyLookup.m consumes it positionally:
+          `[id, name, ~, ~, ~] = funcToTest()`.
+          The divergence this was hiding is real and remains: the porting
+          guide's section 5 and ndi_xlang_principles section 3 both require
+          multiple MATLAB outputs to be returned as a Python TUPLE in
+          declaration order. Python returns a single OntologyResult instead.
+          It carries all six fields, so no information is lost, and an object
+          is arguably the better Python API -- but it is a divergence from the
+          stated contract, and it must be recorded as one rather than
+          described as a "functional match".
+          It has already cost something. NDI-python's ndi/fun/doc.py:135, 169
+          and 198 each write `ont_id, name = lookup(...)`, the MATLAB-shaped
+          positional unpack. OntologyResult defines __slots__ and no
+          __iter__, so every one of those raises TypeError, and every one is
+          wrapped in `except Exception` that falls back to using the input
+          string as both id and name. Species, Strain and biological-sex
+          ontology lookups in ndi.fun.doc have therefore never resolved, and
+          never reported that they did not.
+          Adding __iter__ to OntologyResult in field order would satisfy both
+          shapes at once -- positional unpacking for MATLAB parity, attribute
+          access for Python callers -- and would fix those three call sites
+          without changing any other. Not done here; this branch is the
+          repository split. Raised for NDI-python#98.
+          Python uses a prefix-based dispatcher routing to provider classes;
+          MATLAB uses static methods on the ontology class. Both accept the
+          same 'prefix:id' input format. Uses @pydantic.validate_call.
 
       # --- Instance: lookupTermOrID ---
       - name: lookupTermOrID
@@ -347,9 +374,10 @@ providers:
     inherits: "OntologyProvider"
     status: ported
     matlab_last_sync_hash: "73e71fc"
+    matlab_examined: true
     sync_status: >
-      NOT EXAMINED against NDIC.m at 73e71fc. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      EXAMINED against NDIC.m at 73e71fc (2026-09-02).
+      MATLAB returns the BARE identifier: NDIC.m:67 is `id = num2str(ndicData.Identifier(rowIndex))`, the prefix having been stripped before dispatch (NDIC.m:21). Python returned 'NDIC:8'; FIXED 2026-09-02 to return '8'. Found by the shared case table on its first run, offline.
       never checked against this MATLAB class.
 
   - name: NCIm
@@ -359,9 +387,10 @@ providers:
     inherits: "OntologyProvider"
     status: ported
     matlab_last_sync_hash: "8e109b0"
+    matlab_examined: true
     sync_status: >
-      NOT EXAMINED against NCIm.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      EXAMINED against NCIm.m at 8e109b0 (2026-09-02).
+      MATLAB returns the BARE concept code: NCIm.m:138 is `id = char(data.code)`. Python returned 'NCIm:C0018787'; FIXED 2026-09-02 to return 'C0018787'. Same defect as NDIC, found by reading the case table's expected_id column after the NDIC failure.
       never checked against this MATLAB class.
 
   - name: NCBITaxon
@@ -407,9 +436,10 @@ providers:
     inherits: "OntologyProvider"
     status: ported
     matlab_last_sync_hash: "8e109b0"
+    matlab_examined: true
     sync_status: >
-      NOT EXAMINED against PubChem.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
+      EXAMINED against PubChem.m at 8e109b0 (2026-09-02).
+      MATLAB returns the BARE CID: PubChem.m:148 is `id = char(cid)`. Python returned 'PubChem:2244'; FIXED 2026-09-02 to return '2244'. Same defect as NDIC and NCIm.
       never checked against this MATLAB class.
 
   - name: EMPTY

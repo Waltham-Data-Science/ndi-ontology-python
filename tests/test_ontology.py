@@ -380,7 +380,7 @@ class TestNDICProvider:
         ]
         NDICProvider._data = fake_data
         result = provider.lookup_term("1")
-        assert result.id == "NDIC:1"
+        assert result.id == "1"
         assert result.name == "visual cortex"
         assert result.definition == "Area V1"
         NDICProvider._data = None
@@ -393,7 +393,7 @@ class TestNDICProvider:
         ]
         provider = NDICProvider()
         result = provider.lookup_term("visual cortex")
-        assert result.id == "NDIC:1"
+        assert result.id == "1"
         NDICProvider._data = None
 
     def test_lookup_case_insensitive_name(self):
@@ -404,7 +404,7 @@ class TestNDICProvider:
         ]
         provider = NDICProvider()
         result = provider.lookup_term("visual cortex")
-        assert result.id == "NDIC:1"
+        assert result.id == "1"
         NDICProvider._data = None
 
     def test_lookup_not_found(self):
@@ -447,7 +447,7 @@ class TestNCImProvider:
         }
         with patch.object(provider, "_http_get_json", return_value=mock_data):
             result = provider.lookup_term("C0027947")
-        assert result.id == "NCIm:C0027947"
+        assert result.id == "C0027947"
         assert result.name == "ndi_neuron"
         assert result.definition == "A nerve cell"
         assert "Nerve Cell" in result.synonyms
@@ -467,7 +467,7 @@ class TestNCImProvider:
         }
         with patch.object(provider, "_http_get_json", side_effect=[search_data, detail_data]):
             result = provider.lookup_term("ndi_neuron")
-        assert result.id == "NCIm:C0027947"
+        assert result.id == "C0027947"
 
     def test_api_error(self):
         from ndi_ontology.providers import NCImProvider
@@ -553,7 +553,7 @@ class TestPubChemProvider:
             provider, "_http_get_json", side_effect=[title_data, desc_data, syn_data]
         ):
             result = provider.lookup_term("2244")
-        assert result.id == "PubChem:2244"
+        assert result.id == "2244"
         assert result.name == "Aspirin"
 
     def test_cid_prefix_lookup(self):
@@ -565,7 +565,7 @@ class TestPubChemProvider:
             provider, "_http_get_json", side_effect=[title_data, Exception, Exception]
         ):
             result = provider.lookup_term("CID:962")
-        assert result.id == "PubChem:962"
+        assert result.id == "962"
 
     def test_name_search(self):
         from ndi_ontology.providers import PubChemProvider
@@ -577,7 +577,7 @@ class TestPubChemProvider:
             provider, "_http_get_json", side_effect=[search_data, title_data, Exception, Exception]
         ):
             result = provider.lookup_term("Aspirin")
-        assert result.id == "PubChem:2244"
+        assert result.id == "2244"
 
     def test_api_error(self):
         from ndi_ontology.providers import PubChemProvider

@@ -222,7 +222,11 @@ class NDICProvider(OntologyProvider):
         for entry in data:
             if entry["id"] == term or entry["name"].lower() == term.lower():
                 return OntologyResult(
-                    id=f'NDIC:{entry["id"]}',
+                    # Bare identifier, no "NDIC:" prefix. MATLAB's NDIC.m:67 is
+                    # `id = num2str(ndicData.Identifier(rowIndex))`, and the
+                    # README's "external database lookups" rule says the prefix
+                    # may not appear in the returned id.
+                    id=entry["id"],
                     name=entry["name"],
                     prefix="NDIC",
                     definition=entry["description"],
@@ -259,7 +263,9 @@ class NCImProvider(OntologyProvider):
         syns = [s.get("name", "") for s in data.get("synonyms", []) if isinstance(s, dict)]
 
         return OntologyResult(
-            id=f'NCIm:{data.get("code", cui)}',
+            # Bare concept code, no "NCIm:" prefix -- MATLAB NCIm.m:138,
+            # `id = char(data.code)`.
+            id=data.get("code", cui),
             name=data.get("name", ""),
             prefix="NCIm",
             definition=definition,
@@ -474,7 +480,9 @@ class PubChemProvider(OntologyProvider):
             synonyms = []
 
         return OntologyResult(
-            id=f"PubChem:{cid}",
+            # Bare CID, no "PubChem:" prefix -- MATLAB PubChem.m:148,
+            # `id = char(cid)`.
+            id=cid,
             name=title,
             prefix="PubChem",
             definition=definition,

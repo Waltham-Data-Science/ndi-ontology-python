@@ -125,23 +125,18 @@ def _provider_for(lookup_string: str):
 # defect until it has been read against the MATLAB source and found to be a
 # deliberate, recorded divergence.
 
-NDIC_ID_PREFIX = (
-    "Python returns 'NDIC:8' where MATLAB returns '8'. ndi-ontology-matlab's "
-    "NDIC.m:67 is `id = num2str(ndicData.Identifier(rowIndex))` -- the bare "
-    "identifier, the prefix having been stripped before dispatch (NDIC.m:21). "
-    "providers.py builds an 'NDIC:'-prefixed id instead. This repository's own "
-    "README documents MATLAB's behaviour: for external database lookups 'the "
-    "prefix may not appear in the returned ID'. A port defect, not a design "
-    "choice -- but out of scope for the split PR that introduced this file. "
-    "Tracked for NDI-python#98."
-)
+# Currently empty. The one divergence this table found on its first run --
+# Python returning 'NDIC:8' where MATLAB returns '8' -- was a port defect, so
+# it was fixed rather than marked. NCIm and PubChem carried the same defect and
+# were fixed with it: MATLAB returns a bare concept code (NCIm.m:138) and a bare
+# CID (PubChem.m:148). Every other ontology in the table does keep its canonical
+# prefix, so this is per-provider, not a blanket rule.
+KNOWN_DIVERGENCES: dict[str, str] = {}
 
 
 def _known_divergence(case: dict) -> str | None:
     """Return the reason this case is a known, recorded divergence, or None."""
-    if case.get("ontology") == "NDIC" and case.get("should_succeed"):
-        return NDIC_ID_PREFIX
-    return None
+    return KNOWN_DIVERGENCES.get(case.get("lookup_string", ""))
 
 
 def _as_param(case: dict):
