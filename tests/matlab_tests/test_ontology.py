@@ -199,16 +199,20 @@ class TestOntologyLookupLive:
 
     @requires_network
     def test_lookup_invalid_term(self):
-        """Live: looking up a non-existent term returns empty or partial result.
+        """Live: a valid prefix with a non-existent id raises.
 
-        MATLAB equivalent: TestOntologyLookup.testInvalidTerm
+        MATLAB equivalent: TestOntologyLookup.testInvalidTerm, which asserts
+        ``verifyError(funcToTest, ?MException)`` for every failure case. This
+        test previously asserted the opposite -- that the lookup "should not
+        raise" -- which was a port of Python's old empty-result divergence
+        rather than of the MATLAB test it names.
         """
         clearCache()
 
-        # A valid prefix but non-existent ID -- should return empty
-        result = lookup("CL:9999999")
-        assert isinstance(result, OntologyResult)
-        # May or may not find something, but should not raise
+        with pytest.raises(NDIOntologyLookupError) as excinfo:
+            lookup("CL:9999999")
+
+        assert "CL:9999999" in str(excinfo.value)
 
     @requires_network
     def test_lookup_caching(self):
