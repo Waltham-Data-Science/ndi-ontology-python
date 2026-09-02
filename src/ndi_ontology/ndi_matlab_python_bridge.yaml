@@ -108,7 +108,7 @@ classes:
           - name: "[id, name, prefix, definition, synonyms, shortName]"
             type_matlab: "6 separate output arguments (char, char, char, char, cell, char)"
             type_python: "OntologyResult (one object, six attributes)"
-        return_shape_divergence: true
+        return_shape_divergence: resolved
         decision_log: >
           CORRECTED 2026-09-02. The previous entry read "MATLAB returns a
           struct with id, name, definition, synonyms, shortName". That is
@@ -127,19 +127,31 @@ classes:
           is arguably the better Python API -- but it is a divergence from the
           stated contract, and it must be recorded as one rather than
           described as a "functional match".
-          It has already cost something. NDI-python's ndi/fun/doc.py:135, 169
-          and 198 each write `ont_id, name = lookup(...)`, the MATLAB-shaped
-          positional unpack. OntologyResult defines __slots__ and no
-          __iter__, so every one of those raises TypeError, and every one is
-          wrapped in `except Exception` that falls back to using the input
-          string as both id and name. Species, Strain and biological-sex
-          ontology lookups in ndi.fun.doc have therefore never resolved, and
-          never reported that they did not.
-          Adding __iter__ to OntologyResult in field order would satisfy both
-          shapes at once -- positional unpacking for MATLAB parity, attribute
-          access for Python callers -- and would fix those three call sites
-          without changing any other. Not done here; this branch is the
-          repository split. Raised for NDI-python#98.
+          It had already cost something. NDI-python's ndi/fun/doc.py:135, 169
+          and 198 each wrote `ont_id, name = lookup(...)`, the MATLAB-shaped
+          positional unpack. OntologyResult defined __slots__ and no
+          __iter__, so every one of those raised TypeError into an
+          `except Exception` that fell back to using the input string as both
+          id and name: Species, Strain and biological-sex lookups in
+          ndi.fun.doc had never resolved, and never reported that they did
+          not.
+          RESOLVED 2026-09-02. OntologyResult now defines __iter__ and
+          __len__, yielding the six fields in MATLAB's declared order, so a
+          caller may read the result either way:
+            id, name, prefix, definition, synonyms, shortName = lookup(...)
+            id, name, *_ = lookup(...)
+            result.id
+          __iter__ reads __slots__ rather than a second hand-written list, so
+          the tuple order cannot drift from the field list, and
+          test_iteration_order_matches_matlab pins __slots__ to the order
+          transcribed from ontology.m:125 -- the test compares against MATLAB,
+          not against the class, so reordering the fields fails it.
+          One asymmetry remains and cannot be removed: MATLAB lets a caller
+          request FEWER outputs than are declared, while Python unpacking
+          demands an exact count. `id, name = lookup(...)` still raises, now
+          ValueError rather than TypeError. The MATLAB-shaped read of the
+          first N outputs is therefore spelled `id, name, *_`, which is what
+          NDI-python's three call sites now use.
           Python uses a prefix-based dispatcher routing to provider classes;
           MATLAB uses static methods on the ontology class. Both accept the
           same 'prefix:id' input format. Uses @pydantic.validate_call.
