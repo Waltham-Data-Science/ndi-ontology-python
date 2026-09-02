@@ -57,8 +57,10 @@ jobs:
           COVERAGE_CORE=$(python -c "import sys; print('sysmon' if sys.version_info >= (3,12) else 'ctrace')")
           export COVERAGE_CORE
           # -m "not live": this job must be fast and deterministic, so it runs
-          # only the mocked suite. The live ontology APIs are exercised by the
-          # shared-cases job below.
+          # only the mocked suite -- it makes no network call at all, now that
+          # every live test carries the marker and the reachability probe is
+          # lazy. The live ontology APIs are exercised by the shared-cases job
+          # below.
           pytest tests/ -v --tb=short -m "not live" \
             --cov=src/ndi_ontology --cov-report=term-missing
 
@@ -132,11 +134,21 @@ jobs:
       # NDI-python#98; -rs lists them, so the run doubles as a progress meter
       # for the port. Cases that hit an unreachable API skip rather than fail,
       # so only a genuine id/name mismatch turns this job red.
+      #
+      # matlab_tests/test_ontology.py runs here too. Its four live tests used
+      # to run in the `test` job instead -- unmarked, so `-m "not live"` did
+      # not deselect them -- which put a network dependency in the job that is
+      # supposed to be deterministic, and left them outside the one place
+      # NDI_ONTOLOGY_REQUIRE_LIVE is set. They are the live suite; this is the
+      # live job.
       - name: Run ndi-ontology-matlab's case table against the port
         env:
           NDI_ONTOLOGY_MATLAB_DIR: ${{ github.workspace }}/ndi-ontology-matlab
           # A run that skipped every live case is not a passing run. Without
           # this, one throttled probe against OLS silently turned this job into
-          # "6 passed, 61 skipped in 6.56s" and reported success.
+          # "6 passed, 61 skipped in 6.56s" and reported success. It now covers
+          # both live modules, so neither can go green having checked nothing.
           NDI_ONTOLOGY_REQUIRE_LIVE: "1"
-        run: pytest tests/test_shared_cases.py -v --tb=short -rs
+        run: |
+          pytest tests/test_shared_cases.py tests/matlab_tests/test_ontology.py \
+            -v --tb=short -rs

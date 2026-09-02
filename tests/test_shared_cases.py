@@ -37,10 +37,14 @@ import time
 from pathlib import Path
 
 import pytest
-import requests
 
 from ndi_ontology import lookup
 from ndi_ontology.providers import PROVIDER_REGISTRY, NDICProvider
+from tests._live import (
+    REQUIRE_LIVE,
+    network_available,
+    reachability_failure_message,
+)
 
 CASE_FILE_RELPATH = Path("tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json")
 
@@ -80,42 +84,6 @@ requires_case_file = pytest.mark.skipif(
         "to one to run the shared case table"
     ),
 )
-
-
-def _can_reach_network() -> bool:
-    """Probe through `requests`, for the reason given in tests/matlab_tests.
-
-    Retried, because this one request decides whether the entire parity suite
-    runs. A single probe against an API that had just been asked for 46
-    lookups turned the whole job into "6 passed, 61 skipped in 6.56s" --
-    green, having checked nothing.
-    """
-    for delay in (0.0, 3.0, 9.0):
-        if delay:
-            time.sleep(delay)
-        try:
-            if (
-                requests.get("https://www.ebi.ac.uk/ols4/api/ontologies", timeout=10).status_code
-                == 200
-            ):
-                return True
-        except requests.RequestException:
-            continue
-    return False
-
-
-NETWORK_AVAILABLE = _can_reach_network()
-
-# Skipping the live cases is a convenience for a developer with no network. In
-# CI it is a lie: the job reports success having verified no parity at all.
-# NDI-python solved the same problem for its symmetry suite with
-# NDI_SYMMETRY_STRICT=1 -- "a symmetry check that could not run counts as a
-# failure" (issue #90) -- so this is that gate, under the matching name.
-REQUIRE_LIVE = os.environ.get("NDI_ONTOLOGY_REQUIRE_LIVE", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-}
 
 
 def _provider_for(lookup_string: str):
@@ -232,7 +200,7 @@ def test_matlab_case_table(case: dict) -> None:
     # needs neither a provider nor the network. Skipping it as "not ported"
     # would have been a lie about why it did not run.
     if provider is not None and provider is not NDICProvider:
-        if not NETWORK_AVAILABLE:
+        if not network_available():
             pytest.skip("no network access; this case queries a live ontology API")
         time.sleep(INTER_CASE_DELAY_S)
 
@@ -295,8 +263,4 @@ def test_live_apis_reachable_when_required() -> None:
     if not REQUIRE_LIVE:
         pytest.skip("NDI_ONTOLOGY_REQUIRE_LIVE is not set; live cases may skip")
 
-    assert NETWORK_AVAILABLE, (
-        "NDI_ONTOLOGY_REQUIRE_LIVE is set, but the ontology APIs are unreachable "
-        "after three attempts, so every live parity case would skip and this job "
-        "would pass without checking anything. Treat this as a failed run."
-    )
+    assert network_available(), reachability_failure_message("every live parity case")

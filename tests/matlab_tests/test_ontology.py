@@ -15,7 +15,6 @@ Mocked tests run without network.
 """
 
 import pytest
-import requests
 
 from ndi_ontology import (
     NDIOntologyLookupError,
@@ -23,34 +22,32 @@ from ndi_ontology import (
     clearCache,
     lookup,
 )
-
-# ---------------------------------------------------------------------------
-# Network availability check
-# ---------------------------------------------------------------------------
-
-
-def _can_reach_network() -> bool:
-    """Check whether the live ontology APIs are actually reachable.
-
-    Probe with ``requests``, not a raw socket. A raw ``socket.create_connection``
-    ignores HTTPS_PROXY and so reports success in any environment that routes
-    outbound HTTPS through a proxy -- the connect to port 443 succeeds while
-    every real lookup is refused by the proxy. The providers swallow that
-    refusal and return an empty OntologyResult, which turns a missing network
-    into a *failing* live test rather than a skipped one. Probing through the
-    same stack the providers use makes the guard tell the truth.
-    """
-    try:
-        resp = requests.get("https://www.ebi.ac.uk/ols4/api/ontologies", timeout=5)
-        return resp.status_code == 200
-    except requests.RequestException:
-        return False
-
-
-requires_network = pytest.mark.skipif(
-    not _can_reach_network(),
-    reason="No network access for ontology lookup",
+from tests._live import (
+    REQUIRE_LIVE,
+    network_available,
+    reachability_failure_message,
 )
+
+# ---------------------------------------------------------------------------
+# Network availability
+# ---------------------------------------------------------------------------
+
+
+def test_live_apis_reachable_when_required() -> None:
+    """In CI, the live tests below must actually run.
+
+    MATLAB's TestOntologyLookup has no skip machinery at all -- it states
+    "Requires an active internet connection" and fails without one. These tests
+    skip instead, which is a convenience locally and a lie in CI: four tests
+    that quietly do not run look exactly like four that passed. That is how
+    test_lookup_invalid_term kept asserting the pre-raise contract through a
+    full local suite. Under NDI_ONTOLOGY_REQUIRE_LIVE the skip becomes a
+    failure, which is MATLAB's behaviour.
+    """
+    if not REQUIRE_LIVE:
+        pytest.skip("NDI_ONTOLOGY_REQUIRE_LIVE is not set; live tests may skip")
+
+    assert network_available(), reachability_failure_message("every live test in this module")
 
 
 # ===========================================================================
@@ -163,13 +160,27 @@ class TestOntologyLookupMocked:
 # ===========================================================================
 
 
+@pytest.mark.live
 class TestOntologyLookupLive:
     """Port of ndi.unittest.ontology.TestOntologyLookup (live network).
 
-    These tests require network access and hit real ontology APIs.
+    These tests require network access and hit real ontology APIs, so they
+    carry the `live` marker the rest of the live suite uses. Without it they
+    ran in the mocked `test` job, which claims to be fast and deterministic
+    and was neither: the job reached OLS on every run, and a stale assertion
+    here failed there rather than in the job meant to exercise the APIs.
+
+    The gate is a fixture, not a module-level skipif. A skipif condition is
+    evaluated at collection, so the probe ran even for `-m "not live"`, which
+    made the mocked job pay for -- and depend on -- a network call it never
+    used. As a fixture it runs only for tests actually selected.
     """
 
-    @requires_network
+    @pytest.fixture(autouse=True)
+    def _requires_network(self):
+        if not network_available():
+            pytest.skip("No network access for ontology lookup")
+
     def test_lookup_ncbi_taxonomy(self):
         """Live: look up 'NCBITaxon:10090' (mouse).
 
@@ -184,7 +195,6 @@ class TestOntologyLookupLive:
         # The name should contain 'Mus musculus' or 'mouse'
         assert result.name, "Should have a non-empty name"
 
-    @requires_network
     def test_lookup_cell_ontology(self):
         """Live: look up 'CL:0000540' (neuron).
 
@@ -197,7 +207,6 @@ class TestOntologyLookupLive:
         assert result
         assert result.name, "Should have a non-empty name"
 
-    @requires_network
     def test_lookup_invalid_term(self):
         """Live: a valid prefix with a non-existent id raises.
 
@@ -214,7 +223,6 @@ class TestOntologyLookupLive:
 
         assert "CL:9999999" in str(excinfo.value)
 
-    @requires_network
     def test_lookup_caching(self):
         """Live: second lookup uses cached result.
 
