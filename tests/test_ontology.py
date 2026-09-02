@@ -819,3 +819,94 @@ class TestPackagedDataFiles:
                 if pattern.match(line) and "ndi_ontology" not in line:
                     offenders.append(f"{py.name}:{lineno}: {line.strip()}")
         assert not offenders, "ndi_ontology must not import NDI-python:\n" + "\n".join(offenders)
+
+
+# ---------------------------------------------------------------------------
+# Positional (MATLAB-shaped) access
+# ---------------------------------------------------------------------------
+
+
+class TestOntologyResultIteration:
+    """OntologyResult unpacks like MATLAB's six output arguments.
+
+    MATLAB's ndi.ontology.lookup declares
+    `[id, name, prefix, definition, synonyms, shortName]` (ontology.m:125), and
+    the porting guide's section 5 requires multiple MATLAB outputs to become a
+    Python tuple in declaration order. These tests pin that order to the MATLAB
+    declaration, not to whatever the class currently happens to do.
+    """
+
+    #: Transcribed from ndi-ontology-matlab src/ndi/+ndi/ontology.m:125,
+    #: mapped to the Python field names. shortName -> short_name is the only
+    #: rename, and it predates this change.
+    MATLAB_OUTPUT_ORDER = ("id", "name", "prefix", "definition", "synonyms", "short_name")
+
+    def _sample(self):
+        from ndi_ontology import OntologyResult
+
+        return OntologyResult(
+            id="CL:0000540",
+            name="neuron",
+            prefix="CL",
+            definition="A cell of the nervous system",
+            synonyms=["nerve cell"],
+            short_name="CL_0000540",
+        )
+
+    def test_iteration_order_matches_matlab(self):
+        """The declared field order IS MATLAB's output order."""
+        from ndi_ontology import OntologyResult
+
+        assert OntologyResult.__slots__ == self.MATLAB_OUTPUT_ORDER
+
+    def test_unpacks_into_all_six(self):
+        id_, name, prefix, definition, synonyms, short_name = self._sample()
+        assert id_ == "CL:0000540"
+        assert name == "neuron"
+        assert prefix == "CL"
+        assert definition == "A cell of the nervous system"
+        assert synonyms == ["nerve cell"]
+        assert short_name == "CL_0000540"
+
+    def test_matlab_shaped_first_two(self):
+        """`id, name, *_` is how a caller asks for MATLAB's first two outputs.
+
+        This is the idiom the three NDI-python call sites use. MATLAB lets a
+        caller request fewer outputs than declared; Python unpacking does not,
+        so the remainder is spelled out.
+        """
+        ont_id, name, *_ = self._sample()
+        assert (ont_id, name) == ("CL:0000540", "neuron")
+
+    def test_exact_count_still_enforced(self):
+        """Two names for six values raises, as Python requires.
+
+        Recorded so the limit is explicit: __iter__ does not make
+        `id, name = lookup(...)` work, it makes `id, name, *_` work.
+        """
+        import pytest
+
+        with pytest.raises(ValueError):
+            _a, _b = self._sample()
+
+    def test_tuple_and_len(self):
+        from ndi_ontology import OntologyResult
+
+        assert len(self._sample()) == len(OntologyResult.__slots__) == 6
+        assert tuple(self._sample())[:3] == ("CL:0000540", "neuron", "CL")
+
+    def test_iteration_agrees_with_attributes_and_to_dict(self):
+        """One field order, three ways of reading it -- they must not diverge."""
+        from ndi_ontology import OntologyResult
+
+        r = self._sample()
+        by_attr = [getattr(r, f) for f in OntologyResult.__slots__]
+        assert list(r) == by_attr
+        assert list(r.to_dict().values()) == by_attr
+
+    def test_an_empty_result_still_unpacks(self):
+        """A failed lookup unpacks too, rather than raising a second error."""
+        from ndi_ontology import OntologyResult
+
+        ont_id, name, *_ = OntologyResult()
+        assert (ont_id, name) == ("", "")

@@ -21,6 +21,7 @@ for why the distribution is named ndi_ontology rather than ndi.ontology.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
 
 import pydantic
@@ -33,8 +34,35 @@ from .providers import PROVIDER_REGISTRY
 
 
 class OntologyResult:
-    """Result from an ontology lookup."""
+    """Result from an ontology lookup.
 
+    Supports both access styles, deliberately:
+
+        result = lookup('CL:0000540')
+        result.id                                   # attribute access
+        id, name, prefix, definition, syn, short = lookup('CL:0000540')
+        id, name, *_ = lookup('CL:0000540')         # MATLAB-shaped, first N
+
+    MATLAB's ndi.ontology.lookup declares six separate output arguments
+    (ontology.m:125), and the porting guide's section 5 requires those to
+    become a Python tuple in declaration order. Returning a single object
+    satisfied neither, and it cost something: NDI-python wrote
+    ``ont_id, name = lookup(...)`` at three call sites, which raised
+    TypeError into an ``except Exception`` and silently fell back to using
+    the input string as both id and name. Species, Strain and
+    biological-sex lookups had never resolved.
+
+    Note the one place Python cannot follow MATLAB: MATLAB lets a caller
+    request fewer outputs than are declared, while Python unpacking demands
+    an exact count. ``id, name = lookup(...)`` still raises -- now
+    ValueError rather than TypeError -- so the MATLAB-shaped read spells the
+    remainder explicitly as ``id, name, *_``.
+    """
+
+    #: MATLAB's output order, from `[id, name, prefix, definition, synonyms,
+    #: shortName] = lookup(...)` at ontology.m:125. __iter__ yields these by
+    #: reading __slots__, so the tuple order cannot drift from the field list;
+    #: test_iteration_order_matches_matlab pins it to the MATLAB declaration.
     __slots__ = ("id", "name", "prefix", "definition", "synonyms", "short_name")
 
     def __init__(
@@ -58,6 +86,14 @@ class OntologyResult:
 
     def __bool__(self) -> bool:
         return bool(self.id or self.name)
+
+    def __iter__(self) -> Iterator[Any]:
+        """Yield the six fields in MATLAB's declared output order."""
+        return iter([getattr(self, field) for field in OntologyResult.__slots__])
+
+    def __len__(self) -> int:
+        """Number of output arguments, matching MATLAB's six."""
+        return len(OntologyResult.__slots__)
 
     def to_dict(self) -> dict[str, Any]:
         return {
