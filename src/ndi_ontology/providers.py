@@ -310,8 +310,7 @@ class NCBITaxonProvider(OntologyProvider):
             return OntologyResult()
 
     def _lookup_taxid(self, taxid: str) -> Any:
-        import xml.etree.ElementTree as ET
-
+        import defusedxml.ElementTree as ET
         import requests
 
         from . import OntologyResult
@@ -343,8 +342,7 @@ class NCBITaxonProvider(OntologyProvider):
         )
 
     def _search_name(self, name: str) -> Any:
-        import xml.etree.ElementTree as ET
-
+        import defusedxml.ElementTree as ET
         import requests
 
         from . import OntologyResult
