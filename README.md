@@ -82,7 +82,7 @@ result.short_name
 | `EFO` | [Experimental Factor Ontology](https://www.ebi.ac.uk/efo/) | ✅ |
 | `EMPTY` | [Experimental Measurements, Purposes, and Treatments ontologY](https://github.com/Waltham-Data-Science/empty-ontology) | ✅ |
 | `NDIC` | NDI Controlled Vocabulary (local) | ✅ |
-| `WBStrain` | [WormBase Strain Database](https://wormbase.org) | ✅ |
+| `WBStrain` / `wormbase` | [WormBase](https://wormbase.org) strains, read from [WormMine](https://wormmine.alliancegenome.org) | ✅ |
 | `UBERON` | [Uberon Multi-Species Anatomy Ontology](http://obofoundry.org/ontology/uberon.html) | ✅ |
 | `NCIT` | [NCI Thesaurus](http://obofoundry.org/ontology/ncit.html) | ✅ |
 | `EDAM` / `format` | [EDAM Bioinformatics Ontology](http://edamontology.org) | ✅ |

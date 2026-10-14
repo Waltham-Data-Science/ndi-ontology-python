@@ -48,7 +48,8 @@
     {"prefix": "EMPTY", "ontology_name": "EMPTY"},
     {"prefix": "NCIT", "ontology_name": "NCIT"},
     {"prefix": "SNOMED", "ontology_name": "SNOMED"},
-    {"prefix": "WBStrain", "ontology_name": "WBStrain"},
+    {"prefix": "WBStrain", "ontology_name": "WormBase"},
+    {"prefix": "wormbase", "ontology_name": "WormBase"},
     {"prefix": "EFO", "ontology_name": "EFO"},
     {"prefix": "EDAM", "ontology_name": "EDAM"},
     {"prefix": "format", "ontology_name": "EDAM"},
@@ -119,9 +120,9 @@
       "api_url": "https://www.ebi.ac.uk/ols4/api/ontologies/ncit"
     },
     {
-      "name": "WBStrain",
+      "name": "WormBase",
       "homepage": "https://wormbase.org",
-      "api_url": "https://wormbase.org/species/c_elegans/strain"
+      "api_url": "https://wormmine.alliancegenome.org/wormmine/service"
     },
     {
       "name": "SNOMED",

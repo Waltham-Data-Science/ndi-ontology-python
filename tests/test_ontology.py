@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # OntologyResult tests
 # ---------------------------------------------------------------------------
@@ -219,7 +221,7 @@ class TestProviderRegistry:
         assert "NCIm" in PROVIDER_REGISTRY
         assert "CHEBI" in PROVIDER_REGISTRY
         assert "NCBITaxon" in PROVIDER_REGISTRY
-        assert "WBStrain" in PROVIDER_REGISTRY
+        assert "WormBase" in PROVIDER_REGISTRY
         assert "SNOMED" in PROVIDER_REGISTRY
         assert "RRID" in PROVIDER_REGISTRY
         assert "EFO" in PROVIDER_REGISTRY
@@ -685,36 +687,119 @@ class TestRRIDProvider:
 
 
 # ---------------------------------------------------------------------------
-# WBStrainProvider tests
+# WormBaseProvider tests
 # ---------------------------------------------------------------------------
 
 
-class TestWBStrainProvider:
-    """Tests for WormBase strain provider."""
+def _wormmine(*records):
+    """A WormMine jsonobjects response holding RECORDS."""
+    return {"results": list(records), "wasSuccessful": True, "error": None}
+
+
+_N2 = {
+    "primaryIdentifier": "WBStrain00000001",
+    "name": "N2",
+    "genotype": "Caenorhabditis elegans wild isolate.",
+    "otherName": None,
+    "mutagen": None,
+    "outcrossed": None,
+}
+
+
+class TestWormBaseProvider:
+    """Tests for the WormBase strain provider (WormMine-backed)."""
 
     def test_numeric_id_lookup(self):
-        from ndi_ontology.providers import WBStrainProvider
+        from ndi_ontology.providers import WormBaseProvider
 
-        provider = WBStrainProvider()
-        mock_data = {
-            "fields": {
-                "name": {"data": {"label": "N2"}},
-                "genotype": {"data": "wild type"},
-            }
-        }
-        with patch.object(provider, "_http_get_json", return_value=mock_data):
-            result = provider.lookup_term("00000001")
+        provider = WormBaseProvider()
+        with patch.object(provider, "_http_get_json", return_value=_wormmine(_N2)) as get:
+            result = provider.lookup_term("00000001", "WBStrain")
         assert result.id == "WBStrain:00000001"
         assert result.name == "N2"
-        assert result.definition == "wild type"
+        assert result.prefix == "WBStrain"
+        assert result.definition == "Genotype: Caenorhabditis elegans wild isolate."
+        query = get.call_args.kwargs["params"]["query"]
+        assert 'path="Strain.primaryIdentifier"' in query
+        assert 'value="WBStrain00000001"' in query
 
-    def test_api_error(self):
-        from ndi_ontology.providers import WBStrainProvider
+    def test_name_lookup_ignores_case(self):
+        from ndi_ontology.providers import WormBaseProvider
 
-        provider = WBStrainProvider()
-        with patch.object(provider, "_http_get_json", side_effect=Exception("error")):
-            result = provider.lookup_term("N2")
+        provider = WormBaseProvider()
+        with patch.object(provider, "_http_get_json", return_value=_wormmine(_N2)) as get:
+            result = provider.lookup_term("n2", "WBStrain")
+        assert result.id == "WBStrain:00000001"
+        assert 'path="Strain.name"' in get.call_args.kwargs["params"]["query"]
+
+    def test_bioregistry_curie_keeps_its_form(self):
+        from ndi_ontology.providers import WormBaseProvider
+
+        provider = WormBaseProvider()
+        with patch.object(provider, "_http_get_json", return_value=_wormmine(_N2)):
+            result = provider.lookup_term("WBStrain00000001", "wormbase")
+        assert result.id == "wormbase:WBStrain00000001"
+        assert result.prefix == "wormbase"
+
+    def test_not_found_is_empty(self):
+        from ndi_ontology.providers import WormBaseProvider
+
+        provider = WormBaseProvider()
+        with patch.object(provider, "_http_get_json", return_value=_wormmine()):
+            result = provider.lookup_term("99999999", "WBStrain")
         assert not result
+
+    @pytest.mark.parametrize("term", ["WBGene00000001", "CE12345", "N*"])
+    def test_not_a_strain_raises_without_a_query(self, term):
+        from ndi_ontology.providers import WormBaseProvider
+
+        provider = WormBaseProvider()
+        with patch.object(provider, "_http_get_json") as get:
+            with pytest.raises(ValueError):
+                provider.lookup_term(term, "wormbase")
+        get.assert_not_called()
+
+    def test_ambiguous_name_raises(self):
+        from ndi_ontology.providers import WormBaseProvider
+
+        provider = WormBaseProvider()
+        other = dict(_N2, primaryIdentifier="WBStrain00000002")
+        with patch.object(provider, "_http_get_json", return_value=_wormmine(_N2, other)):
+            with pytest.raises(ValueError, match="2 WormBase strains"):
+                provider.lookup_term("N2", "WBStrain")
+
+    def test_name_mismatch_raises(self):
+        from ndi_ontology.providers import WormBaseProvider
+
+        provider = WormBaseProvider()
+        with patch.object(provider, "_http_get_json", return_value=_wormmine(_N2)):
+            with pytest.raises(ValueError, match="Try the WBStrain ID"):
+                provider.lookup_term("N3", "WBStrain")
+
+    def test_wormmine_error_raises(self):
+        from ndi_ontology.providers import WormBaseProvider
+
+        provider = WormBaseProvider()
+        response = {"results": [], "wasSuccessful": False, "error": "bad query"}
+        with patch.object(provider, "_http_get_json", return_value=response):
+            with pytest.raises(ValueError, match="bad query"):
+                provider.lookup_term("N2", "WBStrain")
+
+    def test_api_error_reaches_lookup_as_lookup_error(self):
+        from ndi_ontology import NDIOntologyLookupError, clearCache, lookup
+        from ndi_ontology.providers import WormBaseProvider
+
+        clearCache()
+        with patch.object(WormBaseProvider, "_http_get_json", side_effect=Exception("403")):
+            with pytest.raises(NDIOntologyLookupError, match="403"):
+                lookup("WBStrain:N2")
+
+    def test_both_prefixes_route_to_wormbase(self):
+        from ndi_ontology import _load_prefix_map
+
+        m = _load_prefix_map()
+        assert m["WBStrain"] == "WormBase"
+        assert m["wormbase"] == "WormBase"
 
 
 # ---------------------------------------------------------------------------

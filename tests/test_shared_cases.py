@@ -247,7 +247,9 @@ def test_case_table_covers_every_ported_provider() -> None:
     # NCIT joined this list when it was ported for NDI-python#98 -- the table
     # covers fifteen ontologies and NCIT is not one of them. This test is what
     # noticed; that is what it is for.
-    known_gaps = {"WBStrain", "SNOMED", "EFO", "NCIT"}
+    #
+    # WormBase left it when ndi-ontology-matlab added its strain cases (9d8fc03).
+    known_gaps = {"SNOMED", "EFO", "NCIT"}
     unexpected = set(uncovered) - known_gaps
     assert not unexpected, (
         f"ported providers with no case in ndi-ontology-matlab's table: " f"{sorted(unexpected)}"
