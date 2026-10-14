@@ -12,6 +12,7 @@ import csv
 import re
 from typing import Any
 from urllib.parse import quote
+from xml.sax.saxutils import escape
 
 import pydantic
 
@@ -326,20 +327,74 @@ class NCBITaxonProvider(OntologyProvider):
             return OntologyResult()
 
         name = taxon.findtext("ScientificName", "")
-        synonyms = []
-        for other in taxon.findall(".//OtherNames/Name/DispName"):
-            if other.text:
-                synonyms.append(other.text)
-        common = taxon.findtext(".//OtherNames/CommonName", "")
-        if common:
-            synonyms.insert(0, common)
 
         return OntologyResult(
             id=f"NCBITaxon:{taxid}",
             name=name,
             prefix="NCBITaxon",
-            synonyms=synonyms,
+            synonyms=self.parseOtherNames(resp.text),
         )
+
+    # The kinds of <Name> entry that name the same taxon. MATLAB: keptKinds in
+    # NCBITaxon.parseOtherNames.
+    _KEPT_KINDS = (
+        "genbank common name",
+        "common name",
+        "synonym",
+        "genbank synonym",
+        "equivalent name",
+        "acronym",
+        "genbank acronym",
+    )
+
+    @staticmethod
+    @pydantic.validate_call
+    def parseOtherNames(xml_response: str) -> list[str]:
+        """The other names of a taxon in an efetch record.
+
+        MATLAB equivalent: ndi.ontology.NCBITaxon.parseOtherNames
+
+        Reads the first ``<OtherNames>`` block of an E-utilities efetch taxonomy
+        record and returns its names in the order they appear, without
+        duplicates. NCBI tags each name with its kind, either as its own element
+        (``<GenbankCommonName>house mouse</GenbankCommonName>``) or as a
+        ``<Name>`` entry with a ``<ClassCDE>`` and a ``<DispName>``. The kinds
+        kept are those naming the same taxon: common names, synonyms (such as a
+        former genus, 'Rhabditis elegans'), equivalent names and acronyms.
+        Authority citations ('Mus musculus Linnaeus, 1758'), misspellings, and
+        ``<Includes>`` (narrower groups such as 'nude mice') are left out.
+        Public so the parsing can be tested without the network.
+
+        Regular expressions rather than an XML parser, as MATLAB does, so the
+        two read the same record the same way.
+        """
+        block = re.search(r"<OtherNames>(.*?)</OtherNames>", xml_response, re.S)
+        if block is None:
+            return []
+        block_text = block.group(1)
+        # <Name> entries carry their kind in <ClassCDE>
+        entry_names = []
+        for entry in re.findall(r"<Name>(.*?)</Name>", block_text, re.S):
+            kind = re.search(r"<ClassCDE>(.*?)</ClassCDE>", entry, re.S)
+            disp_name = re.search(r"<DispName>(.*?)</DispName>", entry, re.S)
+            if (
+                kind is not None
+                and disp_name is not None
+                and kind.group(1).strip().lower() in NCBITaxonProvider._KEPT_KINDS
+            ):
+                entry_names.append(disp_name.group(1))
+        # the elements named by their kind, outside the <Name> entries
+        block_text = re.sub(r"<Name>.*?</Name>", "", block_text, flags=re.S)
+        tagged = re.findall(
+            r"<(GenbankCommonName|CommonName|Synonym|GenbankSynonym|"
+            r"EquivalentName|Acronym|GenbankAcronym)>(.*?)</\1>",
+            block_text,
+            re.S,
+        )
+        names = [_unescape_xml(n).strip() for _, n in tagged] + [
+            _unescape_xml(n).strip() for n in entry_names
+        ]
+        return list(dict.fromkeys(n for n in names if n))
 
     def _search_name(self, name: str) -> Any:
         import defusedxml.ElementTree as ET
@@ -359,53 +414,155 @@ class NCBITaxonProvider(OntologyProvider):
         return self._lookup_taxid(id_list[0].text or "")
 
 
-class WBStrainProvider(OntologyProvider):
-    """WormBase Strain ndi_database."""
+class WormBaseProvider(OntologyProvider):
+    """WormBase strains, read from WormMine.
 
-    name = "WBStrain"
+    MATLAB equivalent: ndi-ontology-matlab src/ndi/+ndi/+ontology/WormBase.m
+
+    Serves the ``WBStrain`` and ``wormbase`` prefixes. Strains are read from
+    WormMine, the Alliance of Genome Resources' InterMine copy of WormBase
+    (https://wormmine.alliancegenome.org). The WormBase site and REST API
+    (wormbase.org, rest.wormbase.org) answer programmatic requests with a
+    Cloudflare browser challenge (HTTP 403), so every lookup through them
+    failed.
+    """
+
+    name = "WormBase"
+
+    SERVICE_URL = "https://wormmine.alliancegenome.org/wormmine/service/query/results"
+    _ID_PREFIX = "WBStrain"
+    _VIEW = (
+        "Strain.primaryIdentifier Strain.name Strain.genotype "
+        "Strain.otherName Strain.mutagen Strain.outcrossed"
+    )
 
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
+        """Look up a strain in WormBase by its ID or public name.
+
+        ``term`` is the part after the prefix:
+
+        - ``WBStrain:00000001`` -- an eight-digit ID
+        - ``WBStrain:N2`` -- a strain name, matched ignoring case
+        - ``wormbase:WBStrain00000001`` -- the Bioregistry CURIE (prefix
+          ``wormbase``; Bioregistry has no ``wbstrain``)
+
+        The id is in the form asked for: ``WBStrain:00000001`` for the first
+        two, ``wormbase:WBStrain00000001`` for the third. The name is the strain
+        name, the definition its genotype, mutagen and outcrossing, and the
+        synonyms its other name, if it has one.
+
+        No strain found is an empty result, which lookup() raises on. Every
+        other failure MATLAB raises for raises here too.
+        """
         from . import OntologyResult
 
-        try:
-            if re.match(r"^\d{8}$", term):
-                return self._lookup_id(term)
-            return self._search_name(term)
-        except Exception:
+        id_prefix = self._ID_PREFIX
+        term = term.strip()
+        if "*" in term:
+            raise ValueError(f'A strain name or ID cannot contain "*" ("{term}").')
+        is_curie = re.fullmatch(rf"{id_prefix}\d{{8}}", term) is not None
+        if is_curie:
+            term = term[len(id_prefix) :]
+        elif re.fullmatch(r"CE\d{5}|WB[A-Z][a-z]+\d+", term):
+            # another kind of WormBase id, such as a gene (WBGene00000001)
+            raise ValueError(
+                f'"{term}" is a WormBase id but not a strain id '
+                f"(WBStrain followed by eight digits)."
+            )
+        is_id_lookup = re.fullmatch(r"\d{8}", term) is not None
+        if is_id_lookup:
+            path, value = "Strain.primaryIdentifier", id_prefix + term
+        else:
+            path, value = "Strain.name", term
+
+        strains = self.queryWormMine(path, value)
+        if not strains:
             return OntologyResult()
+        if len(strains) > 1:
+            raise ValueError(
+                f'{len(strains)} WormBase strains match "{term}"; use the WBStrain ID instead.'
+            )
 
-    def _lookup_id(self, strain_id: str) -> Any:
-        from . import OntologyResult
-
-        data = self._http_get_json(
-            f"http://rest.wormbase.org/rest/widget/strain/{strain_id}/overview",
-        )
-        overview = data.get("fields", {})
-        name_data = overview.get("name", {}).get("data", {})
-        name = name_data.get("label", "") if isinstance(name_data, dict) else ""
-        genotype = overview.get("genotype", {}).get("data", "")
-
+        id_, name, definition, synonyms = self.parseStrain(strains[0])
+        if is_curie:
+            id_ = "wormbase:" + id_.replace(":", "")
+        if not is_id_lookup and name.lower() != term.lower():
+            raise ValueError(
+                f'WormMine returned strain "{name}" for the name "{term}". '
+                f"Try the WBStrain ID instead."
+            )
         return OntologyResult(
-            id=f"WBStrain:{strain_id}",
+            id=id_,
             name=name,
-            prefix="WBStrain",
-            definition=str(genotype) if genotype else "",
+            prefix=prefix or id_prefix,
+            definition=definition,
+            synonyms=synonyms,
         )
 
-    def _search_name(self, name: str) -> Any:
-        from . import OntologyResult
+    @staticmethod
+    @pydantic.validate_call
+    def parseStrain(strain: dict) -> tuple[str, str, str, list[str]]:
+        """The lookup outputs for one WormMine strain record.
 
-        data = self._http_get_json(
-            "https://www.alliancegenome.org/api/search",
-            params={"category": "model", "q": f"{name}(Cel)"},
+        MATLAB equivalent: ndi.ontology.WormBase.parseStrain
+
+        ``strain`` is one record of a WormMine ``jsonobjects`` query: a dict
+        with keys primaryIdentifier, name, genotype, otherName, mutagen and
+        outcrossed, any of which may be missing or None. Returns
+        ``(id, name, definition, synonyms)``. Public so the parsing can be
+        tested without the network.
+
+        Raises:
+            ValueError: the record has no valid WBStrain ID, or no name.
+        """
+        id_prefix = WormBaseProvider._ID_PREFIX
+
+        def field(key: str) -> str:
+            value = strain.get(key)
+            return "" if value is None else str(value).strip()
+
+        wb_id = field("primaryIdentifier")
+        if not re.fullmatch(rf"{id_prefix}\d{{8}}", wb_id):
+            raise ValueError(f'WormMine returned a strain without a valid WBStrain ID ("{wb_id}").')
+        id_ = f"{id_prefix}:{wb_id[len(id_prefix):]}"
+
+        name = field("name")
+        if not name:
+            raise ValueError(f"WormMine returned strain {id_} without a name.")
+
+        parts = []
+        if field("genotype"):
+            parts.append("Genotype: " + field("genotype"))
+        if field("mutagen"):
+            parts.append("Mutagen: " + field("mutagen"))
+        if field("outcrossed"):
+            parts.append("Outcrossed: " + field("outcrossed"))
+        definition = ". ".join(parts).replace("..", ".")
+        if definition and not definition.endswith("."):
+            definition += "."
+
+        synonyms = [field("otherName")] if field("otherName") else []
+        return id_, name, definition, synonyms
+
+    def queryWormMine(self, path: str, value: str) -> list[dict]:
+        """The WormMine strain records whose ``path`` equals ``value``.
+
+        MATLAB equivalent: ndi.ontology.WormBase.queryWormMine (private there)
+        """
+        query = (
+            f'<query model="genomic" view="{self._VIEW}">'
+            f'<constraint path="{path}" op="=" value="{escape(value, {chr(34): "&quot;"})}"/>'
+            f"</query>"
         )
-        results = data.get("results", [])
-        if not results:
-            return OntologyResult()
-        primary_id = results[0].get("primaryId", "")
-        strain_id = primary_id.split(":")[-1] if ":" in primary_id else primary_id
-        return self._lookup_id(strain_id)
+        response = self._http_get_json(
+            self.SERVICE_URL, params={"query": query, "format": "jsonobjects"}
+        )
+        if not isinstance(response, dict) or "results" not in response:
+            raise ValueError("WormMine returned an unexpected response.")
+        if response.get("wasSuccessful") is False:
+            raise ValueError(f"WormMine reported an error: {response.get('error')}")
+        return list(response["results"] or [])
 
 
 class RRIDProvider(OntologyProvider):
@@ -1017,7 +1174,7 @@ PROVIDER_REGISTRY.update(
         "NCIm": NCImProvider,
         "CHEBI": CHEBIProvider,
         "NCBITaxon": NCBITaxonProvider,
-        "WBStrain": WBStrainProvider,
+        "WormBase": WormBaseProvider,
         "SNOMED": SNOMEDProvider,
         "RRID": RRIDProvider,
         "EFO": EFOProvider,

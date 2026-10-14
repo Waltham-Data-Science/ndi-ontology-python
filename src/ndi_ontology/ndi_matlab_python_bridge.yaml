@@ -12,10 +12,12 @@ project_metadata:
     extracted into ndi-ontology-matlab (commit d302b0d) and is pulled back
     into NDI-matlab through requirements.txt. All MATLAB paths in this file
     are relative to ndi-ontology-matlab unless the entry says otherwise.
-    Examined against ndi-ontology-matlab at 984abef (2026-09-02).
+    Examined against ndi-ontology-matlab at 984abef (2026-09-02); re-examined
+    at 9d8fc03 (2026-10-14) for its PR #9 (WormBase, NCBITaxon synonyms,
+    string input).
 
-  matlab_examined_hash: "984abef"
-  matlab_examined_date: "2026-09-02"
+  matlab_examined_hash: "9d8fc03"
+  matlab_examined_date: "2026-10-14"
   examination_note: >
     Per the porting guide's section 3, each entry records
     matlab_last_sync_hash: the short hash of the MATLAB file the Python side
@@ -431,23 +433,70 @@ providers:
     python_class: "NCBITaxonProvider"
     inherits: "OntologyProvider"
     status: ported
-    matlab_last_sync_hash: "8e109b0"
+    matlab_last_sync_hash: "0c18bf8"
     sync_status: >
-      NOT EXAMINED against NCBITaxon.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
-      never checked against this MATLAB class.
+      SYNONYMS EXAMINED against NCBITaxon.m at 0c18bf8 (2026-10-14); the id
+      and name-search paths are still NOT EXAMINED.
+      MATLAB's synonyms now come from the static parseOtherNames, ported as
+      NCBITaxonProvider.parseOtherNames under its MATLAB name, with the same
+      regular expressions, kept kinds and order (tagged elements first, then
+      <Name> entries of a kept <ClassCDE>, unescaped, trimmed, de-duplicated).
+      Python previously returned every <DispName> -- authority citations and
+      misspellings included -- plus <CommonName>, and missed <Synonym> and
+      <GenbankCommonName>. Tests: tests/matlab_tests/test_ontology_parsing.py.
+    methods:
+      - name: parseOtherNames
+        kind: static
+        python_name: "NCBITaxonProvider.parseOtherNames"
+        input_arguments:
+          - name: xml_response
+            type_matlab: "char"
+            type_python: "str"
+        output_arguments:
+          - name: names
+            type_matlab: "cell column of char"
+            type_python: "list[str]"
 
-  - name: WBStrain
-    matlab_path: "src/ndi/+ndi/+ontology/WBStrain.m"
+  - name: WormBase
+    matlab_path: "src/ndi/+ndi/+ontology/WormBase.m"
     python_path: "ndi_ontology/providers.py"
-    python_class: "WBStrainProvider"
+    python_class: "WormBaseProvider"
     inherits: "OntologyProvider"
     status: ported
-    matlab_last_sync_hash: "8e109b0"
+    matlab_examined: true
+    matlab_last_sync_hash: "ff3c3fd"
     sync_status: >
-      NOT EXAMINED against WBStrain.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against WormBase.m at ff3c3fd (2026-10-14).
+      Renamed from WBStrain / WBStrainProvider, as MATLAB renamed the class
+      (ff3c3fd); the WBStrain prefix is unchanged and a new `wormbase` prefix
+      (the Bioregistry CURIE, wormbase:WBStrain00000001) routes here too, its
+      id returned in that form. Strains are read from WormMine's InterMine
+      query service (jsonobjects), as MATLAB does since 0c18bf8: wormbase.org
+      and rest.wormbase.org answer scripts with a Cloudflare 403. The old
+      Python provider read rest.wormbase.org for ids and the Alliance search
+      API for names, and swallowed every error into an empty result.
+      Definition is "Genotype: ... Mutagen: ... Outcrossed: ...", synonyms the
+      otherName. Not found is an empty result (lookup() raises); a non-strain
+      WormBase id, a "*", an ambiguous or mismatched name, and a WormMine
+      error raise ValueError, where MATLAB raises ndi:ontology:WormBase:*.
+    methods:
+      - name: parseStrain
+        kind: static
+        python_name: "WormBaseProvider.parseStrain"
+        input_arguments:
+          - name: strain
+            type_matlab: "struct (one webread-decoded WormMine record)"
+            type_python: "dict (one JSON-decoded WormMine record)"
+        output_arguments:
+          - name: "[id, name, definition, synonyms]"
+            type_python: "tuple[str, str, str, list[str]]"
+      - name: queryWormMine
+        kind: static
+        python_name: "WormBaseProvider.queryWormMine"
+        decision_log: >
+          Private static in MATLAB; an instance method in Python so it goes
+          through the provider's _http_get_json, which the tests mock per
+          instance as they do for every other provider. Recorded 2026-10-14.
 
   - name: RRID
     matlab_path: "src/ndi/+ndi/+ontology/RRID.m"
@@ -618,8 +667,12 @@ data_files:
   - name: ontology_list.json
     matlab_path: "src/ndi/ndi_common/ontology/ontology_list.json"
     python_path: "ndi_ontology/ndi_common/ontology/ontology_list.json"
-    matlab_last_sync_hash: "5c75ead"
+    matlab_last_sync_hash: "ff3c3fd"
     sync_status: >
+      IN SYNC as of 2026-10-14: byte-identical copy of ndi-ontology-matlab at
+      ff3c3fd -- 23 prefixes, WBStrain and the new wormbase both mapped to
+      WormBase, whose api_url is now WormMine.
+      Earlier history:
       IN SYNC as of 2026-09-02: copied from ndi-ontology-matlab at 5c75ead,
       22 prefixes, alongside the six providers that make them all resolvable
       (NDI-python#98). Previously 17, and two of those -- Uberon and NCIT --
@@ -666,9 +719,37 @@ tests:
       so a local run without network is still usable.
       Recorded 2026-09-02.
 
+  - matlab_path: "tests/+ndi/+unittest/+ontology/TestNCBITaxonOtherNames.m"
+    python_path: "tests/matlab_tests/test_ontology_parsing.py"
+    matlab_last_sync_hash: "0c18bf8"
+    sync_status: "PORTED 1:1 at 0c18bf8 (2026-10-14), as TestNCBITaxonOtherNames. Offline."
+
+  - matlab_path: "tests/+ndi/+unittest/+ontology/TestWormBaseParsing.m"
+    python_path: "tests/matlab_tests/test_ontology_parsing.py"
+    matlab_last_sync_hash: "ff3c3fd"
+    sync_status: >
+      PORTED 1:1 at ff3c3fd (2026-10-14), as TestWormBaseParsing. Offline.
+      The records are dicts with None where webread gives [].
+
+  - matlab_path: "tests/+ndi/+unittest/+ontology/TestLookupStringInput.m"
+    python_path: "tests/matlab_tests/test_ontology_parsing.py"
+    matlab_last_sync_hash: "0c18bf8"
+    sync_status: >
+      PORTED at 0c18bf8 (2026-10-14), as TestLookupStringInput. MATLAB's fix
+      (convertStringsToChars in lookup) has no Python counterpart -- Python
+      has one string type -- so the test only checks two NDIC lookups agree.
+      Kept so the suites stay one-to-one.
+
+  - matlab_path: "tests/+ndi/+unittest/+ontology/TestLookupSynonyms.m"
+    python_path: "tests/matlab_tests/test_ontology_parsing.py"
+    matlab_last_sync_hash: "0c18bf8"
+    sync_status: >
+      PORTED 1:1 at 0c18bf8 (2026-10-14), as TestLookupSynonymsLive, under the
+      `live` marker (NCBI and WormMine).
+
   - matlab_path: "tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json"
     python_path: "tests/test_shared_cases.py"
-    matlab_last_sync_hash: "8e109b0"
+    matlab_last_sync_hash: "ff3c3fd"
     role: symmetry
     sync_status: >
       CONSUMED DIRECTLY, not vendored. This is the parity check for the
@@ -682,6 +763,9 @@ tests:
       reports parity that is not there.
       Of the 66: 47 run against ported providers, 19 skip themselves naming
       NDI-python#98, so the run doubles as a progress meter for the port.
+      ff3c3fd (2026-10-14) added seven WormBase cases (by id, by name, the
+      wormbase: CURIE, and four that must fail), so WormBase left
+      test_case_table_covers_every_ported_provider's known gaps.
 
 # =========================================================================
 # Caching
@@ -784,10 +868,10 @@ functions:
     type: function
     matlab_path: "src/ndi/+ndi/ontology.m (static method)"
     python_path: "ndi_ontology/__init__.py"
-    matlab_last_sync_hash: "9d9b4e1"
+    matlab_last_sync_hash: "0c18bf8"
     input_arguments:
       - name: lookup_string
-        type_matlab: "char"
+        type_matlab: "char or string scalar"
         type_python: "str"
     output_arguments:
       - name: result
@@ -795,6 +879,9 @@ functions:
     decision_log: >
       Module-level convenience function. Delegates to provider registry.
       Uses @pydantic.validate_call. Synchronized 2026-03-13.
+      0c18bf8 made MATLAB's lookup accept a string scalar
+      (convertStringsToChars); Python has one string type, so nothing to
+      port. Examined 2026-10-14.
 
   - name: clearCache
     type: function
