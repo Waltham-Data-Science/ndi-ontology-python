@@ -409,11 +409,81 @@ class TestOMProvider:
                 ]
             }
         }
-        with patch.object(provider, "_http_get_json", return_value=mock_response) as mock_get:
+        # OM's own file holds no match, so the lookup falls back to OLS.
+        empty_index = {"local": [], "label": [], "definition": [], "alternative": [], "kind": []}
+        with (
+            patch.object(OMProvider, "fileIndex", return_value=empty_index),
+            patch.object(provider, "_http_get_json", return_value=mock_response) as mock_get,
+        ):
             provider.lookup_term("milliMetre")
             # Should convert CamelCase to 'milli metre'
             args, kwargs = mock_get.call_args
             assert kwargs["params"]["q"] == "milli metre"
+
+    INDEX = {
+        "local": ["metre", "second-Time"],
+        "label": ["metre", "second"],
+        "definition": ["The metre is a unit of length.", ""],
+        "alternative": [["meter"], []],
+        "kind": ["om:Unit", "om:SingularUnit"],
+    }
+
+    def test_unit_is_read_from_oms_file_without_ols(self):
+        """MATLAB OM.m step 0: units are individuals, which OLS lacks."""
+        from ndi_ontology.providers import OMProvider
+
+        provider = OMProvider()
+        with (
+            patch.object(OMProvider, "fileIndex", return_value=self.INDEX),
+            patch.object(provider, "_http_get_json") as mock_get,
+        ):
+            result = provider.lookup_term("meter", "OM")
+        mock_get.assert_not_called()
+        assert result.id == "OM:metre"
+        assert result.name == "metre"
+        assert result.definition == "The metre is a unit of length."
+        assert result.synonyms == ["meter"]
+
+    def test_numeric_term_skips_the_file(self):
+        from ndi_ontology.providers import OMProvider
+
+        provider = OMProvider()
+        with (
+            patch.object(OMProvider, "fileIndex") as mock_index,
+            patch.object(provider, "_http_get_json", return_value={"response": {"docs": []}}),
+        ):
+            assert not provider.lookup_term("182", "OM")
+        mock_index.assert_not_called()
+
+    def test_unreadable_file_warns_and_falls_back_to_ols(self):
+        from ndi_ontology.providers import OMProvider
+
+        provider = OMProvider()
+        doc = {"obo_id": "", "label": "molar volume unit", "short_form": "MolarVolumeUnit"}
+        with (
+            patch.object(OMProvider, "fileIndex", side_effect=OSError("offline")),
+            patch.object(provider, "_http_get_json", return_value={"response": {"docs": [doc]}}),
+            pytest.warns(UserWarning, match="falling back to OLS"),
+        ):
+            result = provider.lookup_term("MolarVolumeUnit", "OM")
+        assert result.name == "molar volume unit"
+
+    def test_file_index_is_downloaded_once_and_cleared_by_clearCache(self):
+        from ndi_ontology import clearCache
+        from ndi_ontology.providers import OMProvider
+
+        clearCache()
+        response = MagicMock(text='  <om:Unit rdf:about="&om;metre">\n  </om:Unit>\n')
+        with patch("requests.get", return_value=response) as mock_get:
+            first = OMProvider.fileIndex()
+            second = OMProvider.fileIndex()
+            assert mock_get.call_count == 1
+            assert first is second
+            assert first["local"] == ["metre"]
+            clearCache()
+            OMProvider.fileIndex()
+            assert mock_get.call_count == 2
+        clearCache()
 
 
 # ---------------------------------------------------------------------------
@@ -1046,21 +1116,24 @@ class TestOLSPortedProviders:
     are right and reach the query.
     """
 
+    # ontology_name_ols and ontology_prefix, as each MATLAB class sets them
     OLS_PARAMS = {
         "Uberon": ("uberon", "UBERON"),
         "NCIT": ("ncit", "NCIT"),
         "STATO": ("stato", "STATO"),
+        "MICRO": ("micro", "MICRO"),
+        "MCO": ("mco", "MCO"),
+        "OBI": ("obi", "OBI"),
+        "ZECO": ("zeco", "ZECO"),
+        "WBls": ("wbls", "WBls"),
     }
 
     def test_ols_parameters_match_matlab(self):
-        from ndi_ontology.providers import NCITProvider, STATOProvider, UberonProvider
+        from ndi_ontology.providers import PROVIDER_REGISTRY, OLSProvider
 
-        for cls, key in (
-            (UberonProvider, "Uberon"),
-            (NCITProvider, "NCIT"),
-            (STATOProvider, "STATO"),
-        ):
-            ontology, prefix = self.OLS_PARAMS[key]
+        for key, (ontology, prefix) in self.OLS_PARAMS.items():
+            cls = PROVIDER_REGISTRY[key]
+            assert issubclass(cls, OLSProvider)
             assert cls.ols_ontology == ontology
             assert cls.ols_prefix == prefix
 
@@ -1290,6 +1363,91 @@ class TestSchemaOrgProvider:
             result = provider.lookup_term("Organization", "schema")
 
         assert (result.id, result.name) == ("schema:Organization", "Organization")
+
+
+class TestCREDITProvider:
+    """MATLAB equivalent: +ndi/+ontology/CREDIT.m. Offline: the roles are held here."""
+
+    def test_lookup_by_slug(self):
+        from ndi_ontology import lookup
+
+        result = lookup("credit:data-curation")
+        assert result.id == "credit:data-curation"
+        assert result.name == "Data curation"
+        assert result.definition.startswith("Management activities")
+        assert result.synonyms == ["CREDIT:00000002"]
+
+    @pytest.mark.parametrize(
+        "term",
+        [
+            "writing-review-editing",
+            "Writing \u2013 review & editing",
+            "Writing - review & editing",
+            "writing review and editing role",
+            "00000014",
+            "14",
+            "CREDIT_00000014",
+            "credit:14",
+        ],
+    )
+    def test_lookup_by_name_or_number(self, term):
+        from ndi_ontology.providers import CREDITProvider
+
+        result = CREDITProvider().lookup_term(term, "credit")
+        assert result.id == "credit:writing-review-editing"
+        assert result.name == "Writing \u2013 review & editing"
+
+    def test_the_cro_numbering_is_an_alias(self):
+        from ndi_ontology import lookup
+
+        assert lookup("CREDIT:00000001").id == "credit:conceptualization"
+
+    @pytest.mark.parametrize("term", ["corresponding author", "00000015", "0", "", "role"])
+    def test_not_found_raises(self, term):
+        from ndi_ontology import NDIOntologyLookupError, lookup
+
+        with pytest.raises(NDIOntologyLookupError, match="CRediT roles"):
+            lookup(f"credit:{term}")
+
+    def test_fourteen_roles_with_distinct_slugs(self):
+        from ndi_ontology.providers import CREDITProvider
+
+        slugs = [row[0] for row in CREDITProvider.ROLES]
+        assert len(slugs) == 14
+        assert len(set(slugs)) == 14
+
+
+class TestOWLTimeProvider:
+    """MATLAB equivalent: +ndi/+ontology/OWLTime.m. Offline: the relations are held here."""
+
+    @pytest.mark.parametrize(
+        "term", ["intervalDuring", "interval during", "INTERVAL_DURING", " IntervalDuring "]
+    )
+    def test_lookup_by_local_name_or_label(self, term):
+        from ndi_ontology.providers import OWLTimeProvider
+
+        result = OWLTimeProvider().lookup_term(term, "time")
+        assert result.id == "time:intervalDuring"
+        assert result.name == "interval during"
+        assert result.synonyms == ["http://www.w3.org/2006/time#intervalDuring"]
+        assert result.definition.startswith("If a proper interval T1 is intervalDuring")
+
+    def test_prefix_is_case_insensitive(self):
+        from ndi_ontology import lookup
+
+        assert lookup("TIME:intervalMetBy").id == "time:intervalMetBy"
+
+    def test_fifteen_relations(self):
+        from ndi_ontology.providers import OWLTimeProvider
+
+        assert len(OWLTimeProvider.RELATIONS) == 15
+
+    @pytest.mark.parametrize("term", ["Instant", "", "interval"])
+    def test_not_found_raises(self, term):
+        from ndi_ontology import NDIOntologyLookupError, lookup
+
+        with pytest.raises(NDIOntologyLookupError, match="interval relations"):
+            lookup(f"time:{term}")
 
 
 class TestPrefixRegistryIsSingleSourced:

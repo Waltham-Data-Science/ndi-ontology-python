@@ -6,14 +6,15 @@ MATLAB source files:
   +ontology/TestWormBaseParsing.m     -> TestWormBaseParsing
   +ontology/TestLookupStringInput.m   -> TestLookupStringInput
   +ontology/TestLookupSynonyms.m      -> TestLookupSynonymsLive
+  +ontology/TestOMFile.m              -> TestOMFile
 
-The first three run offline; TestLookupSynonymsLive queries NCBI and WormMine.
+All but TestLookupSynonymsLive run offline; TestLookupSynonymsLive queries NCBI and WormMine.
 """
 
 import pytest
 
 from ndi_ontology import clearCache, lookup
-from ndi_ontology.providers import NCBITaxonProvider, WormBaseProvider
+from ndi_ontology.providers import NCBITaxonProvider, OMProvider, WormBaseProvider
 from tests._live import network_available
 
 # ===========================================================================
@@ -145,6 +146,98 @@ class TestWormBaseParsing:
         # MATLAB: verifyError(..., 'ndi:ontology:WormBase:APIParsingFailed')
         with pytest.raises(ValueError, match="valid WBStrain ID"):
             WormBaseProvider.parseStrain({"primaryIdentifier": None, "name": "N2"})
+
+
+# ===========================================================================
+# TestOMFile
+# ===========================================================================
+
+
+class TestOMFile:
+    """How OMProvider reads OM's own file, offline.
+
+    OM's units are individuals (`om:metre` is an om:Unit), which the EBI OLS
+    index does not hold, so OMProvider finds them in OM's RDF/XML file. These
+    tests parse a small excerpt written in the file's own layout, so they need
+    no network; the lookups through the real file are in
+    ontology_lookup_tests.json (OM:metre, OM:second, ...).
+    """
+
+    EXCERPT = "\n".join(
+        [
+            '<?xml version="1.0"?>',
+            "<rdf:RDF>",
+            '  <om:Unit rdf:about="&om;metre">',
+            '    <rdfs:label xml:lang="en">metre</rdfs:label>',
+            '    <rdfs:label xml:lang="nl">meter</rdfs:label>',
+            '    <om:alternativeLabel xml:lang="en">meter</om:alternativeLabel>',
+            "    <om:symbol>m</om:symbol>",
+            "  </om:Unit>",
+            "",
+            '  <om:Unit rdf:about="&om;metre">',
+            '    <rdfs:comment xml:lang="en">The metre is a unit of length.</rdfs:comment>',
+            "  </om:Unit>",
+            "",
+            '  <om:UnitDivision rdf:about="&om;metrePerSecond-Time">',
+            '    <rdfs:label xml:lang="en">metre per second</rdfs:label>',
+            '    <om:hasNumerator rdf:resource="&om;metre"/>',
+            "  </om:UnitDivision>",
+            "",
+            '  <owl:Class rdf:about="&om;PixelCountUnit">',
+            '    <rdfs:label xml:lang="en">pixel count unit</rdfs:label>',
+            "    <owl:equivalentClass>",
+            "      <owl:Class>",
+            '        <owl:oneOf rdf:parseType="Collection">',
+            '          <om:SingularUnit rdf:about="&om;pixel"/>',
+            "        </owl:oneOf>",
+            "      </owl:Class>",
+            "    </owl:equivalentClass>",
+            "  </owl:Class>",
+            "",
+            '  <owl:Class rdf:about="&om;Magnitude">',
+            '    <rdfs:label xml:lang="en">magnitude</rdfs:label>',
+            "  </owl:Class>",
+            '  <om:Unit rdf:about="&om;magnitude">',
+            '    <rdfs:label xml:lang="en">magnitude</rdfs:label>',
+            "  </om:Unit>",
+            "</rdf:RDF>",
+        ]
+    )
+
+    def test_blocks_of_one_identifier_are_merged(self):
+        idx = OMProvider.parseRDF(self.EXCERPT)
+        # one entry per top-level identifier; a nested reference is not an entry
+        assert sorted(idx["local"]) == sorted(
+            ["metre", "metrePerSecond-Time", "PixelCountUnit", "Magnitude", "magnitude"]
+        )
+        k = idx["local"].index("metre")
+        assert idx["label"][k] == "metre", "the English label, not the Dutch"
+        assert (
+            idx["definition"][k] == "The metre is a unit of length."
+        ), "the comment, from the second block"
+        assert idx["alternative"][k] == ["meter"]
+        assert idx["kind"][k] == "om:Unit"
+
+    def test_matching_rules(self):
+        idx = OMProvider.parseRDF(self.EXCERPT)
+
+        def name(t):
+            return idx["local"][OMProvider.findInIndex(idx, t)]
+
+        assert name("metre") == "metre", "identifier"
+        assert name("Metre") == "metre", "identifier, ignoring case"
+        assert name("meter") == "metre", "alternative label"
+        assert name("metre per second") == "metrePerSecond-Time", "label"
+        assert name("MetrePerSecond") == "metrePerSecond-Time", "camel-case heuristic"
+        assert (
+            name("Magnitude") == "Magnitude"
+        ), "an exact identifier wins over one differing only in case"
+        assert name("magnitude") == "magnitude"
+        # two entries match ignoring case, and two labels: no single answer
+        assert OMProvider.findInIndex(idx, "MAGNITUDE") is None
+        # pixel is only referenced here, never defined
+        assert OMProvider.findInIndex(idx, "pixel") is None
+        assert OMProvider.findInIndex(idx, "NoSuchUnit") is None
 
 
 # ===========================================================================

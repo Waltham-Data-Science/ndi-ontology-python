@@ -41,6 +41,34 @@
       "ontology_name": "CL"
     },
     {
+      "prefix": "MICRO",
+      "ontology_name": "MICRO"
+    },
+    {
+      "prefix": "MCO",
+      "ontology_name": "MCO"
+    },
+    {
+      "prefix": "OBI",
+      "ontology_name": "OBI"
+    },
+    {
+      "prefix": "ZECO",
+      "ontology_name": "ZECO"
+    },
+    {
+      "prefix": "WBls",
+      "ontology_name": "WBls"
+    },
+    {
+      "prefix": "time",
+      "ontology_name": "OWLTime"
+    },
+    {
+      "prefix": "CREDIT",
+      "ontology_name": "CREDIT"
+    },
+    {
        "prefix": "RRID",
        "ontology_name": "RRID"
     },
@@ -97,6 +125,41 @@
       "name": "CL",
       "homepage": "http://obofoundry.org/ontology/cl.html",
       "api_url": "https://www.ebi.ac.uk/ols/api/ontologies/cl"
+    },
+    {
+      "name": "MICRO",
+      "homepage": "http://obofoundry.org/ontology/micro.html",
+      "api_url": "https://www.ebi.ac.uk/ols/api/ontologies/micro"
+    },
+    {
+      "name": "MCO",
+      "homepage": "https://github.com/microbial-conditions-ontology/microbial-conditions-ontology",
+      "api_url": "https://www.ebi.ac.uk/ols/api/ontologies/mco"
+    },
+    {
+      "name": "OBI",
+      "homepage": "http://obi-ontology.org",
+      "api_url": "https://www.ebi.ac.uk/ols/api/ontologies/obi"
+    },
+    {
+      "name": "ZECO",
+      "homepage": "https://github.com/ybradford/zebrafish-experimental-conditions-ontology",
+      "api_url": "https://www.ebi.ac.uk/ols/api/ontologies/zeco"
+    },
+    {
+      "name": "WBls",
+      "homepage": "https://github.com/obophenotype/c-elegans-development-ontology",
+      "api_url": "https://www.ebi.ac.uk/ols/api/ontologies/wbls"
+    },
+    {
+      "name": "OWLTime",
+      "homepage": "https://www.w3.org/TR/owl-time/",
+      "api_url": null
+    },
+    {
+      "name": "CREDIT",
+      "homepage": "https://credit.niso.org/",
+      "api_url": null
     },
     {
      "name": "RRID",

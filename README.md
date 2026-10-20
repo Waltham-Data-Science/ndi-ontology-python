@@ -89,11 +89,19 @@ result.short_name
 | `IAO` | [Information Artifact Ontology](http://obofoundry.org/ontology/iao.html) | ✅ |
 | `STATO` | [Statistics Ontology](http://stato-ontology.org/) | ✅ |
 | `schema` | [Schema.org](https://schema.org) | ✅ |
+| `MICRO` | [MicrO, prokaryotic phenotypes and culture media](http://obofoundry.org/ontology/micro.html) | ✅ |
+| `MCO` | [Microbial Conditions Ontology](https://github.com/microbial-conditions-ontology/microbial-conditions-ontology) | ✅ |
+| `OBI` | [Ontology for Biomedical Investigations](http://obi-ontology.org) | ✅ |
+| `ZECO` | [Zebrafish Experimental Conditions Ontology](https://github.com/ybradford/zebrafish-experimental-conditions-ontology) | ✅ |
+| `WBls` | [C. elegans Development Ontology](https://github.com/obophenotype/c-elegans-development-ontology) (life stages) | ✅ |
+| `time` | [OWL-Time](https://www.w3.org/TR/owl-time/) interval relations | ✅ |
+| `credit` | [CRediT contributor roles](https://credit.niso.org/) | ✅ |
 
-All nineteen ontologies MATLAB implements are ported, as of
-[NDI-python#98](https://github.com/Waltham-Data-Science/NDI-python/issues/98). Three mechanisms
-are in play, matching MATLAB: most are OLS-backed; `EDAM` and `IAO` download and parse an OWL
-file; `schema` reads each term's JSON-LD document from schema.org.
+All twenty-six ontologies MATLAB implements are ported. The mechanisms match MATLAB: most are
+OLS-backed; `EDAM` and `IAO` download and parse an OWL file; `schema` reads each term's JSON-LD
+document from schema.org; `OM` reads its units from OM's own RDF file (they are individuals,
+which OLS does not index) and falls back to OLS for its classes; `time` and `credit` are fixed
+lists held in the provider, since no lookup service indexes them.
 
 Prefixes are registered in exactly one place — `ontology_list.json`. Adding an ontology means
 adding its entry there and a provider class, and nothing else. `UBERON` and `NCIT` used to be
@@ -176,7 +184,7 @@ black src/ tests/ && ruff check src/ tests/ && pytest tests/ -q -m "not live"
 ### The shared case table (parity with MATLAB)
 
 `ndi-ontology-matlab` drives its own tests from
-`tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json` — 66 cases across 15 ontologies,
+`tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json` — 114 cases across 23 ontologies,
 each naming a lookup string and the exact id and name it must produce. That file is
 language-neutral, so this repository runs **the same cases** against the Python port:
 
@@ -197,9 +205,9 @@ reduced the whole job to `6 passed, 61 skipped in 6.56s` — a green check that 
 at all. This mirrors NDI-python's `NDI_SYMMETRY_STRICT=1`: a check that could not run counts as
 a failure, not a pass.
 
-Of the 66 cases, 47 run today and 19 skip themselves naming
-[NDI-python#98](https://github.com/Waltham-Data-Science/NDI-python/issues/98), so `-rs` output
-doubles as a progress meter for the port. Cases whose API is unreachable skip rather than fail,
+Every case in the table has a ported provider behind it; a case whose ontology were unported
+would skip itself naming
+[NDI-python#98](https://github.com/Waltham-Data-Science/NDI-python/issues/98). Cases whose API is unreachable skip rather than fail,
 so only a genuine mismatch turns the job red.
 
 ### Porting contract

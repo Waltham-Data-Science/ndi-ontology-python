@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import re
+import warnings
 from typing import Any
 from urllib.parse import quote
 from xml.sax.saxutils import escape
@@ -146,19 +147,163 @@ class CLProvider(OLSProvider):
 
 
 class OMProvider(OLSProvider):
-    """Ontology of Units of Measure — label-only lookups."""
+    """Ontology of Units of Measure.
+
+    MATLAB equivalent: +ndi/+ontology/OM.m
+
+    OM's units are INDIVIDUALS (``om:metre`` is an om:Unit, not a class), and
+    the EBI OLS index holds only OM's classes, so a unit cannot be found there
+    at all. lookup_term therefore reads OM's own file first (fileIndex,
+    downloaded once per process) and only when that file cannot be read, or
+    holds no match, falls back to the OLS label search, which finds classes
+    such as ``MolarVolumeUnit``.
+    """
 
     name = "OM"
     ols_ontology = "om"
     ols_prefix = "OM"
 
+    #: OM's own file, the source of its units (individuals, not classes)
+    RDF_URL = "https://raw.githubusercontent.com/HajoRijgersberg/OM/master/om-2.0.rdf"
+
+    _file_index: dict[str, list] | None = None
+
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
+        from . import OntologyResult
 
+        # --- Step 0: OM's own file (units are individuals; OLS lacks them) ---
+        stripped = term.strip()
+        if not re.fullmatch(r"\d+", stripped):
+            idx = None
+            try:
+                idx = OMProvider.fileIndex()
+            except Exception as exc:
+                warnings.warn(
+                    f"Could not read OM's file ({exc}); falling back to OLS.",
+                    stacklevel=2,
+                )
+            if idx:
+                k = OMProvider.findInIndex(idx, stripped)
+                if k is not None:
+                    return OntologyResult(
+                        id=f"OM:{idx['local'][k]}",
+                        name=idx["label"][k],
+                        prefix=prefix or "OM",
+                        definition=idx["definition"][k],
+                        synonyms=list(idx["alternative"][k]),
+                    )
+
+        # --- Fallback: OLS label search (finds OM's classes) ---
         # OM doesn't support numeric ID lookups
         # Convert CamelCase to spaced lowercase for label search
         label = re.sub(r"([a-z])([A-Z])", r"\1 \2", term).lower()
         return self._search_ols(label, "label", prefix or "OM")
+
+    @staticmethod
+    @pydantic.validate_call
+    def fileIndex(reset: bool = False) -> dict[str, list] | None:
+        """OM's entries, read from OM's own file once per process.
+
+        ``OMProvider.fileIndex()`` downloads RDF_URL on first use and returns
+        its index (see parseRDF). ``OMProvider.fileIndex(True)`` forgets it,
+        so the next call downloads again. A failed download raises and caches
+        nothing, as MATLAB's persistent stays empty when webread throws.
+        """
+        if reset:
+            OMProvider._file_index = None
+            return None
+        if OMProvider._file_index is None:
+            import requests
+
+            resp = requests.get(OMProvider.RDF_URL, timeout=60)
+            resp.raise_for_status()
+            OMProvider._file_index = OMProvider.parseRDF(resp.text)
+        return OMProvider._file_index
+
+    @staticmethod
+    @pydantic.validate_call
+    def parseRDF(txt: str) -> dict[str, list]:
+        """Index every top-level entry of OM's RDF/XML file.
+
+        Returns a dict of parallel lists, one element per OM identifier:
+        ``local`` (the part after om-2/, e.g. 'metre', 'second-Time',
+        'Temperature'), ``label`` (the English rdfs:label), ``definition`` (the
+        English rdfs:comment), ``alternative`` (English om:alternativeLabel
+        values) and ``kind`` (the element, e.g. 'om:Unit', 'om:UnitDivision',
+        'owl:Class'). OM states one identifier in several top-level blocks
+        (labels in one, the comment in another); they are merged.
+        """
+        local: list[str] = []
+        label: list[str] = []
+        definition: list[str] = []
+        alternative: list[list[str]] = []
+        kind: list[str] = []
+        where: dict[str, int] = {}
+        # MATLAB's '.' matches newlines and 'lineanchors' makes '^' per-line
+        blocks = re.finditer(
+            r'^  <([\w:]+) rdf:about="&om;([^"]+)">(.*?)^  </\1>', txt, re.M | re.S
+        )
+        for block in blocks:
+            tag, loc, body = block.group(1), block.group(2), block.group(3)
+            if loc in where:
+                k = where[loc]
+            else:
+                k = len(local)
+                where[loc] = k
+                local.append(loc)
+                label.append("")
+                definition.append("")
+                alternative.append([])
+                kind.append(tag)
+            en = re.search(r'<rdfs:label xml:lang="en">([^<]+)</rdfs:label>', body)
+            if not label[k] and en:
+                label[k] = en.group(1).strip()
+            c = re.search(r'<rdfs:comment xml:lang="en">([^<]+)</rdfs:comment>', body)
+            if not definition[k] and c:
+                definition[k] = c.group(1).strip()
+            alt = re.findall(
+                r'<om:alternativeLabel xml:lang="en">([^<]+)</om:alternativeLabel>', body
+            )
+            alternative[k] = list(dict.fromkeys(alternative[k] + [a.strip() for a in alt]))
+        return {
+            "local": local,
+            "label": label,
+            "definition": definition,
+            "alternative": alternative,
+            "kind": kind,
+        }
+
+    @staticmethod
+    @pydantic.validate_call
+    def findInIndex(idx: dict[str, list], term: str) -> int | None:
+        """The one entry TERM names (0-based), or None if none or several.
+
+        Tried in order, the first rule that names exactly one entry wins: the
+        identifier as written; the identifier ignoring case; the English label
+        ignoring case; an English alternative label ignoring case; the
+        camel-case heuristic ('MetrePerSecond' -> 'metre per second') against
+        the labels.
+        """
+        term = term.strip()
+        if not term:
+            return None
+        spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", term).strip().lower()
+        low = term.lower()
+        rules = (
+            lambda: [i for i, x in enumerate(idx["local"]) if x == term],
+            lambda: [i for i, x in enumerate(idx["local"]) if x.lower() == low],
+            lambda: [i for i, x in enumerate(idx["label"]) if x.lower() == low],
+            lambda: [
+                i for i, a in enumerate(idx["alternative"]) if any(x.lower() == low for x in a)
+            ],
+            lambda: [i for i, x in enumerate(idx["label"]) if x.lower() == spaced],
+        )
+        for rule in rules:
+            hit = rule()
+            if len(hit) == 1:
+                return hit[0]
+        return None
 
 
 class CHEBIProvider(OLSProvider):
@@ -828,6 +973,65 @@ class STATOProvider(OLSProvider):
     ols_prefix = "STATO"
 
 
+class MICROProvider(OLSProvider):
+    """MicrO, the Ontology of Prokaryotic Phenotypic and Metabolic Characters.
+
+    MATLAB equivalent: +ndi/+ontology/MICRO.m -- prefix 'MICRO', OLS id 'micro'.
+    Includes culture media components such as peptone (MICRO:0000178).
+    """
+
+    name = "MICRO"
+    ols_ontology = "micro"
+    ols_prefix = "MICRO"
+
+
+class MCOProvider(OLSProvider):
+    """Microbial Conditions Ontology.
+
+    MATLAB equivalent: +ndi/+ontology/MCO.m -- prefix 'MCO', OLS id 'mco'.
+    Describes the conditions of microbial cultures, such as OD600 (MCO:0000059).
+    """
+
+    name = "MCO"
+    ols_ontology = "mco"
+    ols_prefix = "MCO"
+
+
+class OBIProvider(OLSProvider):
+    """Ontology for Biomedical Investigations.
+
+    MATLAB equivalent: +ndi/+ontology/OBI.m -- prefix 'OBI', OLS id 'obi'.
+    """
+
+    name = "OBI"
+    ols_ontology = "obi"
+    ols_prefix = "OBI"
+
+
+class ZECOProvider(OLSProvider):
+    """Zebrafish Experimental Conditions Ontology.
+
+    MATLAB equivalent: +ndi/+ontology/ZECO.m -- prefix 'ZECO', OLS id 'zeco'.
+    Its conditions are general, not zebrafish-specific, such as food
+    availability (ZECO:0000113) and fasting (ZECO:0000114).
+    """
+
+    name = "ZECO"
+    ols_ontology = "zeco"
+    ols_prefix = "ZECO"
+
+
+class WBlsProvider(OLSProvider):
+    """C. elegans Development Ontology: WormBase's life stages.
+
+    MATLAB equivalent: +ndi/+ontology/WBls.m -- prefix 'WBls', OLS id 'wbls'.
+    """
+
+    name = "WBls"
+    ols_ontology = "wbls"
+    ols_prefix = "WBls"
+
+
 # ---------------------------------------------------------------------------
 # OWL-file providers
 # ---------------------------------------------------------------------------
@@ -1163,6 +1367,345 @@ class SchemaOrgProvider(OntologyProvider):
 
 
 # ---------------------------------------------------------------------------
+# Fixed-list providers (no lookup service; terms held here)
+# ---------------------------------------------------------------------------
+
+
+class CREDITProvider(OntologyProvider):
+    """The 14 CRediT contributor roles (ANSI/NISO Z39.104-2022).
+
+    MATLAB equivalent: +ndi/+ontology/CREDIT.m
+
+    Identified as Bioregistry's ``credit`` prefix does, by the role's slug, e.g.
+    ``credit:conceptualization``, which resolves to
+    https://credit.niso.org/contributor-roles/conceptualization/. No lookup
+    service indexes these identifiers (OLS holds only an older numbering,
+    CREDIT_00000001 ... CREDIT_00000014, inside the Contributor Role Ontology),
+    so the names and definitions are held here, as MATLAB holds them. That
+    older numbering is accepted as an alias.
+    """
+
+    name = "CREDIT"
+
+    #: slug, name, definition (credit.niso.org), in the standard's order;
+    #: row k (1-based) is CRO's CREDIT_0000000k
+    ROLES: tuple[tuple[str, str, str], ...] = (
+        (
+            "conceptualization",
+            "Conceptualization",
+            "Ideas; formulation or evolution of overarching research goals and aims.",
+        ),
+        (
+            "data-curation",
+            "Data curation",
+            "Management activities to annotate (produce metadata), scrub data and maintain "
+            "research data (including software code, where it is necessary for interpreting "
+            "the data itself) for initial use and later re-use.",
+        ),
+        (
+            "formal-analysis",
+            "Formal analysis",
+            "Application of statistical, mathematical, computational, or other formal "
+            "techniques to analyse or synthesize study data.",
+        ),
+        (
+            "funding-acquisition",
+            "Funding acquisition",
+            "Acquisition of the financial support for the project leading to this publication.",
+        ),
+        (
+            "investigation",
+            "Investigation",
+            "Conducting a research and investigation process, specifically performing the "
+            "experiments, or data/evidence collection.",
+        ),
+        (
+            "methodology",
+            "Methodology",
+            "Development or design of methodology; creation of models.",
+        ),
+        (
+            "project-administration",
+            "Project administration",
+            "Management and coordination responsibility for the research activity planning "
+            "and execution.",
+        ),
+        (
+            "resources",
+            "Resources",
+            "Provision of study materials, reagents, materials, patients, laboratory samples, "
+            "animals, instrumentation, computing resources, or other analysis tools.",
+        ),
+        (
+            "software",
+            "Software",
+            "Programming, software development; designing computer programs; implementation "
+            "of the computer code and supporting algorithms; testing of existing code "
+            "components.",
+        ),
+        (
+            "supervision",
+            "Supervision",
+            "Oversight and leadership responsibility for the research activity planning and "
+            "execution, including mentorship external to the core team.",
+        ),
+        (
+            "validation",
+            "Validation",
+            "Verification, whether as a part of the activity or separate, of the overall "
+            "replication/reproducibility of results/experiments and other research outputs.",
+        ),
+        (
+            "visualization",
+            "Visualization",
+            "Preparation, creation and/or presentation of the published work, specifically "
+            "visualization/data presentation.",
+        ),
+        (
+            "writing-original-draft",
+            "Writing – original draft",
+            "Preparation, creation and/or presentation of the published work, specifically "
+            "writing the initial draft (including substantive translation).",
+        ),
+        (
+            "writing-review-editing",
+            "Writing – review & editing",
+            "Preparation, creation and/or presentation of the published work by those from "
+            "the original research group, specifically critical review, commentary or "
+            "revision – including pre- or post-publication stages.",
+        ),
+    )
+
+    @pydantic.validate_call
+    def lookup_term(self, term: str, prefix: str = "") -> Any:
+        """Look up a CRediT role by slug, name or number.
+
+        ``term`` is the part after the ``credit:`` prefix. It may be the slug
+        ('writing-review-editing'), the role's name in any of its usual
+        spellings ('Writing - review & editing', 'writing review and editing
+        role'), or CRO's number ('00000014', '14'). The id is always
+        'credit:<slug>'; the synonyms hold CRO's identifier for the role.
+
+        A term that is not one of the 14 roles raises, as MATLAB does.
+        """
+        from . import OntologyResult
+        from .name_utils import name2variableName
+
+        k = CREDITProvider.find(term)
+        if k is None:
+            raise ValueError(f'CREDIT lookup failed: "{term}" is not one of the 14 CRediT roles.')
+        slug, role_name, definition = CREDITProvider.ROLES[k - 1]
+        return OntologyResult(
+            id=f"credit:{slug}",
+            name=role_name,
+            prefix=prefix or "credit",
+            definition=definition,
+            synonyms=[f"CREDIT:{k:08d}"],
+            short_name=name2variableName(role_name),
+        )
+
+    @staticmethod
+    @pydantic.validate_call
+    def find(term: str) -> int | None:
+        """The row of ROLES that TERM names, 1-based as in MATLAB, or None."""
+        roles = CREDITProvider.ROLES
+        term = term.strip()
+        if not term:
+            return None
+        n = re.fullmatch(r"(?:CREDIT[_:])?0*(\d{1,2})", term, re.I)
+        if n:
+            v = int(n.group(1))
+            return v if 1 <= v <= len(roles) else None
+        key = CREDITProvider.normalise(term)
+        for r, (slug, role_name, _definition) in enumerate(roles, start=1):
+            if key in (CREDITProvider.normalise(slug), CREDITProvider.normalise(role_name)):
+                return r
+        return None
+
+    @staticmethod
+    @pydantic.validate_call
+    def normalise(s: str) -> str:
+        """Lower case, words only: dashes, '&', 'and' and a trailing 'role'
+        do not distinguish one role from another."""
+        words = [w for w in re.sub(r"[^a-z]+", " ", s.lower()).split() if w != "and"]
+        if words and words[-1] == "role":
+            words.pop()
+        return " ".join(words)
+
+
+class OWLTimeProvider(OntologyProvider):
+    """The interval relations of OWL-Time, the W3C Time Ontology.
+
+    MATLAB equivalent: +ndi/+ontology/OWLTime.m
+
+    Allen's thirteen relations (time:intervalBefore ... time:intervalEquals)
+    and OWL-Time's two unions of them, time:intervalIn and
+    time:intervalDisjoint. A term is identified as OWL-Time names it,
+    ``time:<localName>``, which resolves to
+    http://www.w3.org/2006/time#<localName>. OWL-Time is not on OLS and the
+    relations are a fixed list, so they are held here, as MATLAB holds them.
+    """
+
+    name = "OWLTime"
+
+    IRI_BASE = "http://www.w3.org/2006/time#"
+
+    #: local name, label, definition (skos:definition in the OWL-Time file)
+    RELATIONS: tuple[tuple[str, str, str], ...] = (
+        (
+            "intervalBefore",
+            "interval before",
+            "If a proper interval T1 is intervalBefore another proper interval T2, then the "
+            "end of T1 is before the beginning of T2.",
+        ),
+        (
+            "intervalAfter",
+            "interval after",
+            "If a proper interval T1 is intervalAfter another proper interval T2, then the "
+            "beginning of T1 is after the end of T2.",
+        ),
+        (
+            "intervalMeets",
+            "interval meets",
+            "If a proper interval T1 is intervalMeets another proper interval T2, then the "
+            "end of T1 is coincident with the beginning of T2.",
+        ),
+        (
+            "intervalMetBy",
+            "interval met by",
+            "If a proper interval T1 is intervalMetBy another proper interval T2, then the "
+            "beginning of T1 is coincident with the end of T2.",
+        ),
+        (
+            "intervalOverlaps",
+            "interval overlaps",
+            "If a proper interval T1 is intervalOverlaps another proper interval T2, then the "
+            "beginning of T1 is before the beginning of T2, the end of T1 is after the "
+            "beginning of T2, and the end of T1 is before the end of T2.",
+        ),
+        (
+            "intervalOverlappedBy",
+            "interval overlapped by",
+            "If a proper interval T1 is intervalOverlappedBy another proper interval T2, then "
+            "the beginning of T1 is after the beginning of T2, the beginning of T1 is before "
+            "the end of T2, and the end of T1 is after the end of T2.",
+        ),
+        (
+            "intervalStarts",
+            "interval starts",
+            "If a proper interval T1 is intervalStarts another proper interval T2, then the "
+            "beginning of T1 is coincident with the beginning of T2, and the end of T1 is "
+            "before the end of T2.",
+        ),
+        (
+            "intervalStartedBy",
+            "interval started by",
+            "If a proper interval T1 is intervalStarted another proper interval T2, then the "
+            "beginning of T1 is coincident with the beginning of T2, and the end of T1 is "
+            "after the end of T2.",
+        ),
+        (
+            "intervalDuring",
+            "interval during",
+            "If a proper interval T1 is intervalDuring another proper interval T2, then the "
+            "beginning of T1 is after the beginning of T2, and the end of T1 is before the "
+            "end of T2.",
+        ),
+        (
+            "intervalContains",
+            "interval contains",
+            "If a proper interval T1 is intervalContains another proper interval T2, then the "
+            "beginning of T1 is before the beginning of T2, and the end of T1 is after the "
+            "end of T2.",
+        ),
+        (
+            "intervalFinishes",
+            "interval finishes",
+            "If a proper interval T1 is intervalFinishes another proper interval T2, then the "
+            "beginning of T1 is after the beginning of T2, and the end of T1 is coincident "
+            "with the end of T2.",
+        ),
+        (
+            "intervalFinishedBy",
+            "interval finished by",
+            "If a proper interval T1 is intervalFinishedBy another proper interval T2, then "
+            "the beginning of T1 is before the beginning of T2, and the end of T1 is "
+            "coincident with the end of T2.",
+        ),
+        (
+            "intervalEquals",
+            "interval equals",
+            "If a proper interval T1 is intervalEquals another proper interval T2, then the "
+            "beginning of T1 is coincident with the beginning of T2, and the end of T1 is "
+            "coincident with the end of T2.",
+        ),
+        (
+            "intervalIn",
+            "interval in",
+            "If a proper interval T1 is intervalIn another proper interval T2, then the "
+            "beginning of T1 is after the beginning of T2 or is coincident with the beginning "
+            "of T2, and the end of T1 is before the end of T2, or is coincident with the end "
+            "of T2, except that end of T1 may not be coincident with the end of T2 if the "
+            "beginning of T1 is coincident with the beginning of T2.",
+        ),
+        (
+            "intervalDisjoint",
+            "interval disjoint",
+            "If a proper interval T1 is intervalDisjoint another proper interval T2, then the "
+            "beginning of T1 is after the end of T2, or the end of T1 is before the beginning "
+            "of T2, i.e. the intervals do not overlap in any way, but their ordering "
+            "relationship is not known.",
+        ),
+    )
+
+    @pydantic.validate_call
+    def lookup_term(self, term: str, prefix: str = "") -> Any:
+        """Look up an OWL-Time interval relation by local name or label.
+
+        ``term`` is the part after the ``time:`` prefix: the local name
+        ('intervalDuring') or the label ('interval during'), in any case, with
+        or without spaces. The id is always 'time:<localName>'; the name is
+        OWL-Time's label; the synonyms hold the term's IRI.
+
+        A term that is not one of the relations raises, as MATLAB does.
+        """
+        from . import OntologyResult
+        from .name_utils import name2variableName
+
+        k = OWLTimeProvider.find(term)
+        if k is None:
+            raise ValueError(
+                f'OWL-Time lookup failed: "{term}" is not one of OWL-Time\'s interval relations.'
+            )
+        local, label, definition = OWLTimeProvider.RELATIONS[k - 1]
+        return OntologyResult(
+            id=f"time:{local}",
+            name=label,
+            prefix=prefix or "time",
+            definition=definition,
+            synonyms=[OWLTimeProvider.IRI_BASE + local],
+            short_name=name2variableName(label),
+        )
+
+    @staticmethod
+    @pydantic.validate_call
+    def find(term: str) -> int | None:
+        """The row of RELATIONS that TERM names, 1-based as in MATLAB, or None.
+
+        Case, spaces and underscores do not distinguish one relation from
+        another, so 'intervalDuring', 'interval during' and 'INTERVAL_DURING'
+        are the same relation.
+        """
+        key = re.sub(r"[\s_]+", "", term.strip().lower())
+        if not key:
+            return None
+        for r, (local, _label, _definition) in enumerate(OWLTimeProvider.RELATIONS, start=1):
+            if key == local.lower():
+                return r
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -1187,5 +1730,12 @@ PROVIDER_REGISTRY.update(
         "EDAM": EDAMProvider,
         "IAO": IAOProvider,
         "SchemaOrg": SchemaOrgProvider,
+        "MICRO": MICROProvider,
+        "MCO": MCOProvider,
+        "OBI": OBIProvider,
+        "ZECO": ZECOProvider,
+        "WBls": WBlsProvider,
+        "OWLTime": OWLTimeProvider,
+        "CREDIT": CREDITProvider,
     }
 )
