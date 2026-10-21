@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 from ndi_ontology import lookup
+from ndi_ontology.name_utils import name2variableName
 from ndi_ontology.providers import (
     PROVIDER_REGISTRY,
     CREDITProvider,
@@ -225,6 +226,11 @@ def test_matlab_case_table(case: dict) -> None:
             f"name mismatch for {lookup_string!r}: "
             f"expected {case['expected_name']!r}, got {result.name!r}"
         )
+        # The table states neither, but MATLAB's lookup() fixes both: the
+        # prefix as typed (ontology.m:295) and name2variableName of the name
+        # (ontology.m:332).
+        assert result.prefix == lookup_string.split(":", 1)[0].strip()
+        assert result.short_name == name2variableName(result.name)
     else:
         # MATLAB asserts an error here: verifyError(funcToTest, ?MException).
         # Python now does the same, raising NDIOntologyLookupError for every
