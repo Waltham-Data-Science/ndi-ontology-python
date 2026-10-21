@@ -49,89 +49,236 @@ class OntologyProvider:
 
 
 class OLSProvider(OntologyProvider):
-    """Provider backed by the EBI OLS4 API."""
+    """Provider backed by the EBI OLS4 API.
+
+    MATLAB equivalent: the shared static helpers in +ndi/ontology.m that every
+    OLS-backed class (CL.m, CHEBI.m, PATO.m, ...) defers to after setting its
+    ontology_prefix and ontology_name_ols: preprocessLookupInput,
+    searchOLSAndPerformIRILookup and performIriLookup, ported here under
+    MATLAB's names.
+
+    The lookup is two requests, as in MATLAB: an OLS search that must name
+    exactly one term, then that term's own record from OLS's term API, which
+    is where the id, name, definition and synonyms are read. "Not found" is an
+    empty result; anything else MATLAB raises for -- an ambiguous match, a
+    transport failure -- raises here too.
+    """
 
     ols_ontology: str = ""
     ols_prefix: str = ""
 
+    OLS_SEARCH_URL = "https://www.ebi.ac.uk/ols4/api/search"
+    OLS_ONTOLOGIES_URL = "https://www.ebi.ac.uk/ols4/api/ontologies/"
+
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
+        search_query, search_field, lookup_type_msg = OLSProvider.preprocessLookupInput(
+            term, self.ols_prefix
+        )
+        return self.searchOLSAndPerformIRILookup(
+            search_query, search_field, self.ols_ontology, self.ols_prefix, lookup_type_msg
+        )
 
-        prefix = prefix or self.ols_prefix
+    @staticmethod
+    @pydantic.validate_call
+    def preprocessLookupInput(
+        term_or_id_or_name: str, ontology_prefix: str
+    ) -> tuple[str, str, str]:
+        """Decide whether TERM is an id or a name and build the OLS query.
 
-        is_numeric = bool(re.match(r"^\d+$", term))
+        MATLAB: ndi.ontology.preprocessLookupInput. Returns (search_query,
+        search_field, lookup_type_msg); MATLAB's fourth output, the original
+        input, is the caller's own argument and is not repeated.
 
-        if is_numeric:
-            # Pass the numeric id through verbatim. MATLAB's
-            # preprocessLookupInput builds `[ontology_prefix ':' numeric_id]`
-            # with no padding, and OLS obo_id is an exact-match field.
-            # Python used term.zfill(7), which is a no-op for the ontologies
-            # whose ids happen to be 7 digits (CL, PATO, UBERON, EMPTY) and
-            # wrong for those whose are not: CHEBI:15377 became CHEBI:0015377
-            # and matched nothing, so every CHEBI lookup by id returned empty
-            # while lookup by name kept working.
-            full_id = f"{prefix}:{term}"
-            return self._search_ols(full_id, "obo_id", prefix)
-        else:
-            return self._search_ols(term, "label", prefix)
+        A numeric id is sent as ``PREFIX:id``, unpadded, against the exact
+        ``obo_id`` field; anything else is a ``label`` search. A remainder that
+        repeats the prefix (``CL:0000540`` given to CL) is unwrapped. OM takes
+        its own branch: numeric ids are rejected and the term is turned into a
+        label by the camel-case heuristic ('MolarVolumeUnit' -> 'molar volume
+        unit').
+        """
+        if not term_or_id_or_name:
+            raise ValueError("an ontology term or id cannot be empty")
+        original = term_or_id_or_name
+        processed = original.strip()
+        prefix_with_colon = ontology_prefix + ":"
+        has_prefix = processed.lower().startswith(prefix_with_colon.lower())
+        remainder = processed[len(prefix_with_colon) :].strip() if has_prefix else processed
 
-    def _search_ols(self, query: str, field: str, prefix: str) -> Any:
+        if ontology_prefix.lower() == "om":
+            if re.fullmatch(r"\d+", remainder):
+                kind = "prefixed numeric ID" if has_prefix else "purely numeric ID"
+                raise ValueError(f'Lookup by {kind} ("{original}") is not supported for OM.')
+            if has_prefix and not remainder:
+                raise ValueError(
+                    f'Input "{original}" has prefix "{prefix_with_colon}" but is missing '
+                    f"term component."
+                )
+            label = OLSProvider.convertComponentToLabel_OMHeuristic(remainder)
+            if not label:
+                raise ValueError(
+                    f'Derived empty search label from OM term component "{remainder}".'
+                )
+            return label, "label", f'input "{original}" (searching label as "{label}")'
+
+        if has_prefix and not remainder:
+            raise ValueError(
+                f'Input "{original}" has prefix "{prefix_with_colon}" but is missing term/ID.'
+            )
+        if re.fullmatch(r"\d+", remainder):
+            kind = "prefixed ID" if has_prefix else "numeric ID"
+            return f"{ontology_prefix}:{remainder}", "obo_id", f'{kind} "{original}"'
+        kind = "prefixed name" if has_prefix else "name"
+        return remainder, "label", f'{kind} "{original}"'
+
+    @staticmethod
+    @pydantic.validate_call
+    def convertComponentToLabel_OMHeuristic(comp: str) -> str:
+        """MATLAB: ndi.ontology.convertComponentToLabel_OMHeuristic."""
+        return re.sub(r"([a-z])([A-Z])", r"\1 \2", comp).strip().lower()
+
+    def searchOLSAndPerformIRILookup(
+        self,
+        search_query: str,
+        search_field: str,
+        ontology_name_ols: str,
+        ontology_prefix: str,
+        lookup_type_msg: str,
+    ) -> Any:
+        """Search OLS for exactly one term, then read it by its IRI.
+
+        MATLAB: ndi.ontology.searchOLSAndPerformIRILookup. An id search must
+        return exactly one result. A label search must name exactly one
+        result whose label equals the query ignoring case; when OLS returns a
+        single result, its label must match too.
+
+        No match is an empty result, which lookup() raises on; more than one
+        match raises, as MATLAB does, rather than picking the first.
+        """
         from . import OntologyResult
 
-        try:
-            params: dict[str, Any] = {
-                "q": query,
-                "ontology": self.ols_ontology,
-                "queryFields": field,
-            }
-            if field == "obo_id":
-                params["exact"] = "true"
+        if search_field not in ("obo_id", "label"):
+            raise ValueError(f"search_field must be 'obo_id' or 'label', not {search_field!r}")
+        params: dict[str, Any] = {
+            "q": search_query,
+            "ontology": ontology_name_ols,
+            "queryFields": search_field,
+        }
+        if search_field == "obo_id":
+            params["exact"] = "true"
 
-            data = self._http_get_json(
-                "https://www.ebi.ac.uk/ols4/api/search",
-                params=params,
+        data = self._http_get_json(OLSProvider.OLS_SEARCH_URL, params=params)
+        response = data.get("response") if isinstance(data, dict) else None
+        if not isinstance(response, dict) or "numFound" not in response:
+            raise ValueError(
+                f"Invalid search response structure from OLS for {lookup_type_msg} "
+                f'in "{ontology_name_ols}".'
+            )
+        num_found = response["numFound"]
+        docs = response.get("docs") or []
+
+        if num_found == 0:
+            return OntologyResult()
+        if num_found == 1:
+            doc = docs[0] if docs else {}
+            if search_field == "label" and doc.get("label", "").lower() != search_query.lower():
+                # MATLAB: MismatchOnSingleResult -- the one hit is not this term
+                return OntologyResult()
+        elif search_field == "label":
+            matches = [d for d in docs if d.get("label", "").lower() == search_query.lower()]
+            if not matches:
+                return OntologyResult()
+            if len(matches) > 1:
+                raise ValueError(
+                    f"Term matching {lookup_type_msg} resulted in {len(matches)} exact matches "
+                    f'(case-insensitive) in "{ontology_name_ols}". Requires unique match.'
+                )
+            doc = matches[0]
+        else:
+            raise ValueError(
+                f"Term matching {lookup_type_msg} yielded {num_found} results in "
+                f'"{ontology_name_ols}" (expected 1 for ID search).'
             )
 
-            docs = data.get("response", {}).get("docs", [])
-            if not docs:
-                return OntologyResult()
+        term_iri = doc.get("iri") or ""
+        if not term_iri:
+            raise ValueError(f"Found unique term for {lookup_type_msg}, but could not extract IRI.")
+        return self.performIriLookup(term_iri, ontology_name_ols, ontology_prefix)
 
-            # For label search, find exact match
-            if field == "label":
-                for doc in docs:
-                    if doc.get("label", "").lower() == query.lower():
-                        return self._doc_to_result(doc, prefix)
-                return OntologyResult()
+    def performIriLookup(self, term_iri: str, ontology_name_ols: str, ontology_prefix: str) -> Any:
+        """Read one term's record from OLS's term API by its IRI.
 
-            doc = docs[0]
-            return self._doc_to_result(doc, prefix)
-
-        except Exception:
-            return OntologyResult()
-
-    def _doc_to_result(self, doc: dict, prefix: str) -> Any:
+        MATLAB: ndi.ontology.performIriLookup. The IRI is URL-encoded twice,
+        as OLS requires. The id is the record's obo_id when it carries this
+        ontology's prefix, else is built from short_form, else falls back to
+        the raw obo_id (EDAM's sub-namespaces); the definition is the first
+        non-empty description; the synonyms are the obo_synonym names.
+        """
         from . import OntologyResult
 
-        obo_id = doc.get("obo_id", "")
-        if not obo_id:
-            short = doc.get("short_form", "")
-            if short:
-                obo_id = short.replace("_", ":")
+        encoded = quote(quote(term_iri, safe=""), safe="")
+        data = self._http_get_json(
+            f"{OLSProvider.OLS_ONTOLOGIES_URL}{ontology_name_ols}/terms/{encoded}"
+        )
+        if not isinstance(data, dict) or not data:
+            raise ValueError(
+                f"Received invalid/empty response from OLS Term API for ontology "
+                f'"{ontology_name_ols}", IRI "{term_iri}".'
+            )
 
-        desc_list = doc.get("description", [])
-        definition = desc_list[0] if isinstance(desc_list, list) and desc_list else ""
+        lower_prefix = ontology_prefix.lower()
+        obo_id = data.get("obo_id") or ""
+        short_form = data.get("short_form") or ""
+        if obo_id and obo_id.lower().startswith(lower_prefix + ":"):
+            id_ = obo_id
+        elif short_form:
+            if short_form.lower().startswith(lower_prefix + "_"):
+                id_ = short_form.replace("_", ":")
+            elif re.fullmatch(r"\d+", short_form):
+                id_ = f"{ontology_prefix}:{short_form}"
+            elif short_form.lower().startswith(lower_prefix + ":"):
+                id_ = short_form
+            else:
+                id_ = ""
+        else:
+            id_ = ""
+        if not id_ and obo_id:
+            id_ = obo_id
+        if not id_:
+            warnings.warn(
+                f"Could not extract valid ID (e.g., {ontology_prefix}:123) from OLS response "
+                f'for ontology "{ontology_name_ols}", IRI "{term_iri}".',
+                stacklevel=2,
+            )
 
-        synonyms = doc.get("synonym", [])
-        if isinstance(synonyms, list):
-            synonyms = [s if isinstance(s, str) else s.get("name", "") for s in synonyms]
+        name = data.get("label") or ""
+        if not name:
+            warnings.warn(
+                f'Field "label" not found/empty for ontology "{ontology_name_ols}", '
+                f'IRI "{term_iri}".',
+                stacklevel=2,
+            )
+
+        description = data.get("description")
+        definition = ""
+        if isinstance(description, list):
+            definition = next((d for d in description if d), "")
+
+        synonyms: list[str] = []
+        obo_synonym = data.get("obo_synonym")
+        if isinstance(obo_synonym, list) and obo_synonym and isinstance(obo_synonym[0], dict):
+            key = (
+                "name" if "name" in obo_synonym[0] else "label" if "label" in obo_synonym[0] else ""
+            )
+            if key:
+                synonyms = [str(x.get(key) or "") for x in obo_synonym if x.get(key)]
 
         return OntologyResult(
-            id=obo_id,
-            name=doc.get("label", ""),
-            prefix=prefix,
+            id=id_,
+            name=name,
+            prefix=ontology_prefix,
             definition=definition,
             synonyms=synonyms,
-            short_name=doc.get("short_form", ""),
         )
 
 
@@ -194,11 +341,10 @@ class OMProvider(OLSProvider):
                         synonyms=list(idx["alternative"][k]),
                     )
 
-        # --- Fallback: OLS label search (finds OM's classes) ---
-        # OM doesn't support numeric ID lookups
-        # Convert CamelCase to spaced lowercase for label search
-        label = re.sub(r"([a-z])([A-Z])", r"\1 \2", term).lower()
-        return self._search_ols(label, "label", prefix or "OM")
+        # --- Steps 1-2: the shared OLS path (finds OM's classes) ---
+        # preprocessLookupInput's OM branch rejects numeric ids and turns the
+        # term into a label by the camel-case heuristic.
+        return super().lookup_term(term, prefix)
 
     @staticmethod
     @pydantic.validate_call
@@ -389,71 +535,107 @@ class NDICProvider(OntologyProvider):
 
 
 class NCImProvider(OntologyProvider):
-    """NCI Metathesaurus — NCI EVS REST API."""
+    """NCI Metathesaurus, read from the NCI EVS REST API.
+
+    MATLAB equivalent: +ndi/+ontology/NCIm.m
+
+    A CUI (C followed by seven digits) is read directly. A name must be an
+    exact match for exactly one concept, which is then read by its CUI; more
+    than one match raises, as in MATLAB, rather than picking the first.
+    """
 
     name = "NCIm"
     _CUI_PATTERN = re.compile(r"^C\d{7}$")
+    SEARCH_URL = "https://api-evsrest.nci.nih.gov/api/v1/concept/search"
+    CONCEPT_URL = "https://api-evsrest.nci.nih.gov/api/v1/concept/ncim/"
 
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
         from . import OntologyResult
 
-        try:
-            if self._CUI_PATTERN.match(term):
-                return self._lookup_cui(term)
-            return self._search_name(term)
-        except Exception:
-            return OntologyResult()
-
-    def _lookup_cui(self, cui: str) -> Any:
-        from . import OntologyResult
+        if self._CUI_PATTERN.match(term):
+            try:
+                return self.performNcimIdLookup(term)
+            except Exception as exc:
+                if _is_404(exc):
+                    # MATLAB: ndi:ontology:NCIm:CUINotFound
+                    return OntologyResult()
+                raise
 
         data = self._http_get_json(
-            f"https://api-evsrest.nci.nih.gov/api/v1/concept/ncim/{cui}",
-            params={"include": "full"},
+            NCImProvider.SEARCH_URL,
+            params={"term": term, "terminology": "ncim", "type": "match", "include": "minimal"},
         )
-        defs = data.get("definitions", [])
-        definition = defs[0].get("definition", "") if defs else ""
-        syns = [s.get("name", "") for s in data.get("synonyms", []) if isinstance(s, dict)]
+        if not isinstance(data, dict) or "total" not in data:
+            raise ValueError(f'Invalid search response for "{term}".')
+        total = data["total"]
+        if total == 0:
+            return OntologyResult()
+        if total > 1:
+            raise ValueError(f'"{term}" had {total} exact matches.')
+        concepts = data.get("concepts")
+        if not isinstance(concepts, list) or len(concepts) != 1:
+            raise ValueError(f'API reported 1 result for "{term}", but concept data invalid.')
+        code = concepts[0].get("code") or ""
+        if not code:
+            raise ValueError(f'Found "{term}", missing Code.')
+        if not self._CUI_PATTERN.match(code):
+            raise ValueError(f'Found "{term}", Code "{code}" invalid format.')
+        return self.performNcimIdLookup(code)
 
+    def performNcimIdLookup(self, cui: str) -> Any:
+        """Read one concept by CUI. MATLAB: NCIm.performNcimIdLookup.
+
+        The id is always the CUI asked for, as in MATLAB; a record whose code
+        differs warns and keeps the CUI.
+        """
+        from . import OntologyResult
+
+        if not cui:
+            raise ValueError("a CUI cannot be empty")
+        data = self._http_get_json(
+            f"{NCImProvider.CONCEPT_URL}{quote(cui, safe='')}", params={"include": "full"}
+        )
+        if not isinstance(data, dict) or not data:
+            raise ValueError(f'Received invalid response from EVS Concept API for CUI "{cui}".')
+        code = data.get("code") or cui
+        if code != cui:
+            warnings.warn(f'Code "{code}"!= CUI "{cui}".', stacklevel=2)
+        definitions = data.get("definitions")
+        definition = ""
+        if isinstance(definitions, list) and definitions and isinstance(definitions[0], dict):
+            definition = definitions[0].get("definition") or ""
+        synonyms: list[str] = []
+        syns = data.get("synonyms")
+        if isinstance(syns, list) and syns and isinstance(syns[0], dict) and "name" in syns[0]:
+            synonyms = [str(x.get("name") or "") for x in syns if x.get("name")]
         return OntologyResult(
-            # Bare concept code, no "NCIm:" prefix -- MATLAB NCIm.m:138,
-            # `id = char(data.code)`.
-            id=data.get("code", cui),
-            name=data.get("name", ""),
+            # Bare concept code, no "NCIm:" prefix, as MATLAB returns it.
+            id=cui,
+            name=data.get("name") or "",
             prefix="NCIm",
             definition=definition,
-            synonyms=syns,
+            synonyms=synonyms,
         )
-
-    def _search_name(self, name: str) -> Any:
-        from . import OntologyResult
-
-        data = self._http_get_json(
-            "https://api-evsrest.nci.nih.gov/api/v1/concept/search",
-            params={"terminology": "ncim", "term": name, "type": "match"},
-        )
-        concepts = data.get("concepts", [])
-        if not concepts:
-            return OntologyResult()
-        return self._lookup_cui(concepts[0].get("code", ""))
 
 
 class NCBITaxonProvider(OntologyProvider):
-    """NCBI Taxonomy — NCBI E-utilities."""
+    """NCBI Taxonomy, read from NCBI E-utilities.
+
+    MATLAB equivalent: +ndi/+ontology/NCBITaxon.m
+
+    A TaxID is fetched directly; a scientific name is searched first. "Not
+    found" is an empty result; anything else MATLAB raises for -- an HTTP
+    error, an unexpected response -- raises here too.
+    """
 
     name = "NCBITaxon"
 
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
-        from . import OntologyResult
-
-        try:
-            if term.isdigit():
-                return self._lookup_taxid(term)
-            return self._search_name(term)
-        except Exception:
-            return OntologyResult()
+        if re.fullmatch(r"\d+", term):
+            return self._lookup_taxid(term)
+        return self._search_name(term)
 
     def _lookup_taxid(self, taxid: str) -> Any:
         import defusedxml.ElementTree as ET
@@ -466,6 +648,10 @@ class NCBITaxonProvider(OntologyProvider):
             params={"db": "taxonomy", "id": taxid, "retmode": "xml"},
             timeout=30,
         )
+        resp.raise_for_status()
+        # MATLAB: IDNotFound when efetch reports an error or holds no <Taxon>
+        if not resp.text or "<Error>" in resp.text or "<Taxon>" not in resp.text:
+            return OntologyResult()
         root = ET.fromstring(resp.text)
         taxon = root.find(".//Taxon")
         if taxon is None:
@@ -552,11 +738,25 @@ class NCBITaxonProvider(OntologyProvider):
             params={"db": "taxonomy", "term": f"{name}[Scientific Name]", "retmode": "xml"},
             timeout=30,
         )
+        resp.raise_for_status()
         root = ET.fromstring(resp.text)
-        id_list = root.findall(".//Id")
+        # MATLAB's regex spans the whole <IdList>, so it captures only the
+        # first <Id> and its NameNotUnique branch cannot fire; taking the
+        # first id is therefore the parity behaviour, not a shortcut.
+        id_list = root.findall(".//IdList/Id")
         if not id_list:
-            return OntologyResult()
-        return self._lookup_taxid(id_list[0].text or "")
+            if any(m in resp.text for m in ("<ErrorList>", "<PhraseNotFound>", "<Count>0</Count>")):
+                return OntologyResult()  # MATLAB: NameNotFound
+            raise ValueError(f'Unexpected/empty esearch response for name "{name}".')
+        found = self._lookup_taxid(id_list[0].text or "")
+        if not found:
+            # MATLAB: PostSearchLookupFailed -- a TaxID the search returned
+            # that efetch cannot read is an error, not "not found".
+            raise ValueError(
+                f'Found name "{name}" (TaxID: {id_list[0].text}), but failed subsequent '
+                f"efetch lookup."
+            )
+        return found
 
 
 class WormBaseProvider(OntologyProvider):
@@ -711,102 +911,212 @@ class WormBaseProvider(OntologyProvider):
 
 
 class RRIDProvider(OntologyProvider):
-    """Research Resource Identifier — SciCrunch resolver."""
+    """Research Resource Identifiers, read from the SciCrunch resolver.
+
+    MATLAB equivalent: +ndi/+ontology/RRID.m
+    """
 
     name = "RRID"
+    RESOLVER_URL = "https://scicrunch.org/resolver/"
 
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
         from . import OntologyResult
 
-        try:
-            full_rrid = f"RRID:{term}"
-            data = self._http_get_json(
-                f"https://scicrunch.org/resolver/{full_rrid}.json",
-            )
-            hits = data.get("hits", {}).get("hits", [])
-            if not hits:
-                return OntologyResult()
-
-            source = hits[0].get("_source", {}).get("item", {})
-            return OntologyResult(
-                id=full_rrid,
-                name=source.get("name", ""),
-                prefix="RRID",
-                definition=source.get("description", ""),
-                synonyms=(
-                    source.get("synonyms", []) if isinstance(source.get("synonyms"), list) else []
-                ),
-            )
-        except Exception:
+        id_, name, definition, synonyms, _, _ = self.performRridResolverLookup(
+            "RRID:" + term.strip()
+        )
+        if not id_:
             return OntologyResult()
+        return OntologyResult(
+            id=id_, name=name, prefix="RRID", definition=definition, synonyms=synonyms
+        )
+
+    @pydantic.validate_call
+    def lookupSpecies(self, term_or_id_or_name: str) -> tuple[str | list[str], str]:
+        """The species an RRID resource is from: (scientificName, commonName).
+
+        MATLAB: RRID.lookupSpecies. scientificName is a list when the record
+        lists several species (MATLAB returns a cell array); either is empty
+        when the record does not say.
+        """
+        _, _, _, _, scientific_name, common_name = self.performRridResolverLookup(
+            "RRID:" + term_or_id_or_name.strip()
+        )
+        return scientific_name, common_name
+
+    def performRridResolverLookup(
+        self, full_rrid: str
+    ) -> tuple[str, str, str, list[str], str | list[str], str]:
+        """Resolve FULL_RRID. MATLAB: RRID.performRridResolverLookup.
+
+        Returns (id, name, definition, synonyms, scientificName, commonName),
+        all empty when the resolver has no hit. Errors propagate, as MATLAB's
+        rethrow does.
+        """
+        id_, name, definition = "", "", ""
+        synonyms: list[str] = []
+        scientific_name: str | list[str] = ""
+        common_name = ""
+        response = self._http_get_json(
+            f"{RRIDProvider.RESOLVER_URL}{quote(full_rrid, safe='')}.json"
+        )
+        hits = (response.get("hits") or {}).get("hits") if isinstance(response, dict) else None
+        if not hits:
+            return id_, name, definition, synonyms, scientific_name, common_name
+
+        source = hits[0].get("_source") or {}
+        item = source.get("item") or {}
+        id_ = full_rrid
+        name = str(item.get("name") or "")
+        definition = str(item.get("description") or "")
+
+        primary = (source.get("organisms") or {}).get("primary")
+        if primary:
+            info = primary[0] if isinstance(primary, list) else primary
+            scientific_name = str((info.get("species") or {}).get("name") or "")
+            common_name = str((info.get("common") or {}).get("name") or "")
+        elif item.get("species"):
+            species = item["species"]
+            scientific_name = (
+                [str(x) for x in species] if isinstance(species, list) else str(species)
+            )
+
+        syn = item.get("synonyms")
+        if isinstance(syn, list):
+            synonyms = [str(x.get("name") or "") if isinstance(x, dict) else str(x) for x in syn]
+        elif isinstance(syn, dict) and "name" in syn:
+            synonyms = [str(syn["name"])]
+        return id_, name, definition, synonyms, scientific_name, common_name
 
 
 class PubChemProvider(OntologyProvider):
-    """PubChem Compound — PUG REST API."""
+    """PubChem compounds, read from the PUG REST API.
+
+    MATLAB equivalent: +ndi/+ontology/PubChem.m
+
+    A CID is given bare ('2244') or after 'cid' ('cid 2244'); anything else
+    is a name, which must name exactly one CID.
+    """
 
     name = "PubChem"
+    PUG_REST_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
         from . import OntologyResult
 
-        try:
-            # Detect CID
+        processed = term.strip()
+        if processed.lower().startswith("cid"):
+            cid = processed[3:].strip()
+            if not re.fullmatch(r"\d+", cid):
+                # MATLAB: InvalidCidPrefixFormat. 'cid:2244' lands here too,
+                # as it does in MATLAB.
+                raise ValueError(
+                    f'Input remainder "{term}" starts with "cid" but is not followed by a '
+                    f"valid numeric ID."
+                )
+        elif re.fullmatch(r"\d+", processed):
+            cid = processed
+        else:
             cid = ""
-            if term.isdigit():
-                cid = term
-            elif term.lower().startswith("cid"):
-                cid = term[3:].lstrip(":").strip()
-            if cid:
-                return self._lookup_cid(cid)
-            return self._search_name(term)
-        except Exception:
-            return OntologyResult()
 
-    def _lookup_cid(self, cid: str) -> Any:
+        if cid:
+            try:
+                return self.performPubChemCidLookup(cid)
+            except LookupError:
+                # MATLAB: ndi:ontology:PubChem:CIDNotFound
+                return OntologyResult()
+
+        try:
+            data = self._http_get_json(
+                f"{PubChemProvider.PUG_REST_BASE}/compound/name/"
+                f"{quote(processed, safe='')}/cids/JSON"
+            )
+        except Exception as exc:
+            if _is_404(exc):
+                return OntologyResult()  # MATLAB: NameNotFound
+            raise
+        cids = (data.get("IdentifierList") or {}).get("CID") if isinstance(data, dict) else None
+        if not cids:
+            return OntologyResult()
+        if len(cids) > 1:
+            raise ValueError(
+                f'Name "{processed}" matched multiple ({len(cids)}) CIDs. Requires unique '
+                f"exact match or CID."
+            )
+        # A CID found by search that then cannot be read is an error, not a
+        # "not found" (MATLAB: PostSearchLookupFailed).
+        return self.performPubChemCidLookup(str(cids[0]))
+
+    def performPubChemCidLookup(self, cid: str) -> Any:
+        """Read one compound. MATLAB: PubChem.performPubChemCidLookup.
+
+        Title, description and synonyms are three requests, each allowed to
+        fail with a warning, as in MATLAB. The name falls back to the first
+        synonym. Raises LookupError (MATLAB: IDNotFound) only when a request
+        404'd and nothing at all came back.
+        """
         from . import OntologyResult
 
-        base = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid"
+        if not cid:
+            raise ValueError("a CID cannot be empty")
+        base = f"{PubChemProvider.PUG_REST_BASE}/compound/cid/{cid}"
+        api_error = False
 
-        title_data = self._http_get_json(f"{base}/{cid}/property/Title/JSON")
-        props = title_data.get("PropertyTable", {}).get("Properties", [{}])
-        title = props[0].get("Title", "") if props else ""
+        def fetch(what: str, url: str) -> Any:
+            nonlocal api_error
+            try:
+                return self._http_get_json(url)
+            except Exception as exc:
+                warnings.warn(f"Could not fetch {what} for CID {cid}: {exc}", stacklevel=3)
+                if _is_404(exc):
+                    api_error = True
+                return None
 
-        try:
-            desc_data = self._http_get_json(f"{base}/{cid}/description/JSON")
-            descs = desc_data.get("InformationList", {}).get("Information", [])
-            definition = descs[0].get("Description", "") if descs else ""
-        except Exception:
-            definition = ""
+        name = ""
+        data = fetch("Title", f"{base}/property/Title/JSON")
+        if isinstance(data, dict):
+            props = (data.get("PropertyTable") or {}).get("Properties")
+            if props and isinstance(props[0], dict):
+                name = str(props[0].get("Title") or "")
 
-        try:
-            syn_data = self._http_get_json(f"{base}/{cid}/synonyms/JSON")
-            syn_info = syn_data.get("InformationList", {}).get("Information", [])
-            synonyms = syn_info[0].get("Synonym", [])[:10] if syn_info else []
-        except Exception:
-            synonyms = []
+        definition = ""
+        data = fetch("description", f"{base}/description/JSON")
+        if isinstance(data, dict):
+            info = (data.get("InformationList") or {}).get("Information")
+            if info and isinstance(info[0], dict):
+                definition = str(info[0].get("Description") or "")
+
+        synonyms: list[str] = []
+        data = fetch("synonyms", f"{base}/synonyms/JSON")
+        if isinstance(data, dict):
+            info = (data.get("InformationList") or {}).get("Information")
+            if info and isinstance(info[0], dict):
+                raw = info[0].get("Synonym")
+                if isinstance(raw, list):
+                    synonyms = [str(x) for x in raw if x]
+                elif isinstance(raw, str) and raw:
+                    synonyms = [raw]
+
+        if not name and synonyms:
+            name = synonyms[0]
+            warnings.warn(
+                f'Title not found for CID {cid}. Using first synonym "{name}".', stacklevel=2
+            )
+        elif not name:
+            warnings.warn(f"Could not determine name for CID {cid}.", stacklevel=2)
+        if api_error and not (name or definition or synonyms):
+            raise LookupError(f"Could not retrieve any data for PubChem CID {cid}.")
 
         return OntologyResult(
-            # Bare CID, no "PubChem:" prefix -- MATLAB PubChem.m:148,
-            # `id = char(cid)`.
+            # Bare CID, no "PubChem:" prefix, as MATLAB returns it.
             id=cid,
-            name=title,
+            name=name,
             prefix="PubChem",
             definition=definition,
             synonyms=synonyms,
         )
-
-    def _search_name(self, name: str) -> Any:
-        from . import OntologyResult
-
-        data = self._http_get_json(
-            f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{quote(name)}/cids/JSON",
-        )
-        cids = data.get("IdentifierList", {}).get("CID", [])
-        if not cids:
-            return OntologyResult()
-        return self._lookup_cid(str(cids[0]))
 
 
 class EMPTYProvider(OntologyProvider):
@@ -1053,25 +1363,15 @@ class NCITProvider(OLSProvider):
 
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
-        from . import OntologyResult
-
-        prefix = prefix or self.ols_prefix
-
         # NCIT.m runs preprocessLookupInput and then, whatever search field it
-        # chose, always searches obo_id for ['NCIT:', search_query]. NCIT codes
-        # (C3262) are not numeric, so the inherited lookup_term sent them to a
-        # label search, which never matches a code; and it resolved names,
-        # which MATLAB does not.
-        query = term.strip()
-        if query.upper().startswith("NCIT:"):
-            query = query[len("NCIT:") :].strip()
-            if not query:
-                return OntologyResult()
-        # preprocessLookupInput turns a numeric id into 'NCIT:<digits>', which
-        # NCIT.m then prefixes again; kept, so this matches what MATLAB sends.
-        if re.match(r"^\d+$", query):
-            query = f"NCIT:{query}"
-        return self._search_ols(f"NCIT:{query}", "obo_id", prefix)
+        # chose, always searches obo_id for ['NCIT:', search_query]. So a code
+        # (C3262) resolves and a name does not; a numeric id, already
+        # 'NCIT:<digits>' from preprocessing, is prefixed again, as MATLAB
+        # sends it.
+        search_query, _, lookup_type_msg = OLSProvider.preprocessLookupInput(term, self.ols_prefix)
+        return self.searchOLSAndPerformIRILookup(
+            f"NCIT:{search_query}", "obo_id", self.ols_ontology, self.ols_prefix, lookup_type_msg
+        )
 
 
 class STATOProvider(OLSProvider):
@@ -1255,6 +1555,12 @@ class _OWLTermProvider(OntologyProvider):
             definition=found["definition"],
             synonyms=list(found["synonyms"]),
         )
+
+
+def _is_404(exc: BaseException) -> bool:
+    """Whether EXC is an HTTP 404, the error MATLAB's providers read as "not found"."""
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) == 404
 
 
 def _unescape_xml(text: str) -> str:
