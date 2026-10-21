@@ -437,6 +437,36 @@ class TestOLSProvider:
             args, kwargs = mock_get.call_args
             assert kwargs["params"]["q"] == "CHEBI:15377"
 
+    def test_ncit_code_is_an_exact_obo_id_search(self):
+        """NCIT.m searches obo_id for ['NCIT:', code]; C3262 is not numeric."""
+        from ndi_ontology.providers import NCITProvider
+
+        provider = NCITProvider()
+        doc = {"obo_id": "NCIT:C3262", "label": "Neoplasm", "short_form": "NCIT_C3262"}
+        with patch.object(
+            provider, "_http_get_json", return_value={"response": {"docs": [doc]}}
+        ) as mock_get:
+            result = provider.lookup_term("C3262", "NCIT")
+        params = mock_get.call_args.kwargs["params"]
+        assert params["q"] == "NCIT:C3262"
+        assert params["queryFields"] == "obo_id"
+        assert params["exact"] == "true"
+        assert result.id == "NCIT:C3262"
+        assert result.name == "Neoplasm"
+
+    def test_ncit_name_is_not_a_label_search(self):
+        """NCIT.m sends a name to the obo_id search too, so it finds nothing."""
+        from ndi_ontology.providers import NCITProvider
+
+        provider = NCITProvider()
+        with patch.object(
+            provider, "_http_get_json", return_value={"response": {"docs": []}}
+        ) as mock_get:
+            assert not provider.lookup_term("Neoplasm", "NCIT")
+        params = mock_get.call_args.kwargs["params"]
+        assert params["q"] == "NCIT:Neoplasm"
+        assert params["queryFields"] == "obo_id"
+
 
 # ---------------------------------------------------------------------------
 # OMProvider tests

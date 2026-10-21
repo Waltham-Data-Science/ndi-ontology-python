@@ -688,10 +688,14 @@ providers:
     sync_status: >
       EXAMINED and PORTED against NCIT.m at 8e109b0 (2026-09-02), for
       NDI-python#98.
-      OLS-backed, ontology 'ncit', prefix 'NCIT'. NOTE: MATLAB's shared case
-      table has no NCIT cases, so nothing cross-checks this provider's
-      parity; recorded as a known gap in test_shared_cases.py and better
-      fixed upstream by adding cases to ndi-ontology-matlab.
+      OLS-backed, ontology 'ncit', prefix 'NCIT'. RE-EXAMINED against NCIT.m
+      at 8e109b0 (2026-10-21), for #13: NCIT.m always searches obo_id for
+      ['NCIT:', search_query], so NCITProvider now overrides lookup_term to
+      do the same. The inherited lookup sent codes such as C3262 (not
+      numeric) to a label search that never matched, and resolved names,
+      which MATLAB does not. NOTE: MATLAB's shared case table has no NCIT
+      cases until ndi-ontology-matlab#13 merges; NCIT stays in
+      test_shared_cases.py's known_gaps until then.
 
 
   - name: EDAM
