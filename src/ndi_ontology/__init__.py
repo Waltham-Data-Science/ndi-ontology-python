@@ -284,10 +284,13 @@ def clearCache() -> None:
 
     MATLAB equivalent: ndi.ontology.clearCache (ndi-ontology-matlab)
     """
-    from .providers import OMProvider
+    from .providers import EMPTYProvider, OMProvider
 
     _lookup_cache.clear()
     OMProvider.fileIndex(True)
+    # MATLAB's EMPTY downloads on every lookup, so it has nothing to clear;
+    # Python's caches the download, and this is what forces a fresh one.
+    EMPTYProvider._cache = None
 
 
 __all__ = ["NDIOntologyLookupError", "OntologyResult", "lookup", "clearCache"]

@@ -878,15 +878,79 @@ class TestWormBaseProvider:
 
 
 class TestEMPTYProvider:
-    """Tests for EMPTY (stub) provider."""
+    """Tests for EMPTY provider, with the download mocked."""
 
-    def test_returns_empty_result(self):
+    GRAPH = {
+        "graphs": [
+            {
+                "nodes": [
+                    {
+                        "id": "http://purl.obolibrary.org/obo/EMPTY_0000074",
+                        "lbl": "Optogenetic Tetanus Stimulation Target Location",
+                        "meta": {"definition": {"val": "Where the light goes."}},
+                    }
+                ]
+            }
+        ]
+    }
+
+    def setup_method(self):
+        from ndi_ontology import clearCache
+
+        clearCache()
+
+    teardown_method = setup_method
+
+    def test_lookup_by_id(self):
         from ndi_ontology.providers import EMPTYProvider
 
         provider = EMPTYProvider()
-        result = provider.lookup_term("anything")
+        with patch.object(provider, "_http_get_json", return_value=self.GRAPH):
+            result = provider.lookup_term("0000074")
+        assert result.id == "EMPTY:0000074"
+        assert result.name == "Optogenetic Tetanus Stimulation Target Location"
+        assert result.definition == "Where the light goes."
+
+    def test_not_found_is_empty(self):
+        from ndi_ontology.providers import EMPTYProvider
+
+        provider = EMPTYProvider()
+        with patch.object(provider, "_http_get_json", return_value=self.GRAPH):
+            result = provider.lookup_term("anything")
         assert result.prefix == "EMPTY"
         assert not result.id
+
+    def test_failed_download_raises_and_is_not_cached(self):
+        """One timeout must not become a permanent "not found"."""
+        import requests
+
+        from ndi_ontology import NDIOntologyLookupError, lookup
+        from ndi_ontology.providers import EMPTYProvider
+
+        with patch.object(
+            EMPTYProvider, "_http_get_json", side_effect=requests.Timeout("timed out")
+        ):
+            with pytest.raises(NDIOntologyLookupError, match="timed out") as excinfo:
+                lookup("EMPTY:0000074")
+        assert isinstance(excinfo.value.__cause__, requests.Timeout)
+        assert EMPTYProvider._cache is None
+
+        # The next lookup downloads again and succeeds, with no clearCache().
+        with patch.object(EMPTYProvider, "_http_get_json", return_value=self.GRAPH):
+            assert lookup("EMPTY:0000074").id == "EMPTY:0000074"
+
+    def test_download_is_cached_until_clearCache(self):
+        from ndi_ontology import clearCache
+        from ndi_ontology.providers import EMPTYProvider
+
+        provider = EMPTYProvider()
+        with patch.object(EMPTYProvider, "_http_get_json", return_value=self.GRAPH) as mock_get:
+            provider.lookup_term("0000074")
+            provider.lookup_term("0000074")
+            assert mock_get.call_count == 1
+            clearCache()
+            provider.lookup_term("0000074")
+            assert mock_get.call_count == 2
 
 
 # ---------------------------------------------------------------------------
