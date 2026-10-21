@@ -4,6 +4,55 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
+class FakeOLS:
+    """Stands in for _http_get_json, answering OLS's search and term APIs.
+
+    MATLAB's lookup is two requests -- a search, then the term's own record
+    by IRI -- so one canned response cannot stand in for both.
+    """
+
+    def __init__(self, docs, records=()):
+        self.docs = docs
+        self.records = {r["iri"]: r for r in records}
+        self.calls = []
+
+    def __call__(self, url, params=None, timeout=30):
+        from urllib.parse import unquote
+
+        self.calls.append((url, params))
+        if url.endswith("/search"):
+            return {"response": {"numFound": len(self.docs), "docs": self.docs}}
+        return self.records[unquote(unquote(url.rsplit("/terms/", 1)[1]))]
+
+    @property
+    def search_params(self):
+        return [p for u, p in self.calls if u.endswith("/search")][-1]
+
+    @property
+    def term_urls(self):
+        return [u for u, _ in self.calls if "/terms/" in u]
+
+
+def ols_doc(prefix, number, label):
+    """A search hit, with the fields OLS's search API returns."""
+    return {
+        "iri": f"http://purl.obolibrary.org/obo/{prefix}_{number}",
+        "label": label,
+        "obo_id": f"{prefix}:{number}",
+        "short_form": f"{prefix}_{number}",
+    }
+
+
+def ols_record(prefix, number, label, description=(), synonyms=()):
+    """A term record, as OLS's term API returns it."""
+    return {
+        **ols_doc(prefix, number, label),
+        "description": list(description),
+        "obo_synonym": [{"name": s, "scope": "hasExactSynonym"} for s in synonyms],
+    }
+
+
 # ---------------------------------------------------------------------------
 # OntologyResult tests
 # ---------------------------------------------------------------------------
@@ -295,147 +344,159 @@ class TestProviderRegistry:
 
 
 class TestOLSProvider:
-    """Tests for OLS-based providers with mocked HTTP calls."""
+    """OLSProvider against MATLAB's shared OLS helpers in ontology.m.
 
-    def test_cl_numeric_lookup(self):
+    preprocessLookupInput, searchOLSAndPerformIRILookup and performIriLookup;
+    the OLS API is faked.
+    """
+
+    NEURON = ols_record(
+        "CL",
+        "0000540",
+        "neuron",
+        description=["", "A cell that receives and transmits nerve impulses"],
+        synonyms=["nerve cell", ""],
+    )
+
+    def test_lookup_by_id_reads_the_term_record(self):
         from ndi_ontology.providers import CLProvider
 
         provider = CLProvider()
-        mock_response = {
-            "response": {
-                "docs": [
-                    {
-                        "obo_id": "CL:0000540",
-                        "label": "neuron",
-                        "short_form": "CL_0000540",
-                        "description": ["A cell that receives and transmits nerve impulses"],
-                        "synonym": ["nerve cell"],
-                    }
-                ]
-            }
+        fake = FakeOLS([ols_doc("CL", "0000540", "neuron")], [self.NEURON])
+        with patch.object(provider, "_http_get_json", side_effect=fake):
+            result = provider.lookup_term("0000540")
+        assert fake.search_params == {
+            "q": "CL:0000540",
+            "ontology": "cl",
+            "queryFields": "obo_id",
+            "exact": "true",
         }
-        with patch.object(provider, "_http_get_json", return_value=mock_response):
-            result = provider.lookup_term("540")
+        # the term API, IRI encoded twice
+        assert fake.term_urls == [
+            "https://www.ebi.ac.uk/ols4/api/ontologies/cl/terms/"
+            "http%253A%252F%252Fpurl.obolibrary.org%252Fobo%252FCL_0000540"
+        ]
         assert result.id == "CL:0000540"
         assert result.name == "neuron"
-        assert result.prefix == "CL"
+        assert result.definition == "A cell that receives and transmits nerve impulses"
+        assert result.synonyms == ["nerve cell"]
 
-    def test_cl_label_lookup(self):
-        from ndi_ontology.providers import CLProvider
-
-        mock_response = {
-            "response": {
-                "docs": [
-                    {
-                        "obo_id": "CL:0000540",
-                        "label": "neuron",
-                        "short_form": "CL_0000540",
-                        "description": ["A cell"],
-                        "synonym": [],
-                    }
-                ]
-            }
-        }
-        provider = CLProvider()
-        with patch.object(provider, "_http_get_json", return_value=mock_response):
-            result = provider.lookup_term("neuron")
-        assert result.name == "neuron"
-
-    def test_cl_label_no_exact_match(self):
-        from ndi_ontology.providers import CLProvider
-
-        mock_response = {
-            "response": {
-                "docs": [
-                    {
-                        "obo_id": "CL:0000001",
-                        "label": "motor neuron",
-                        "short_form": "CL_0000001",
-                        "description": [],
-                        "synonym": [],
-                    }
-                ]
-            }
-        }
-        provider = CLProvider()
-        with patch.object(provider, "_http_get_json", return_value=mock_response):
-            result = provider.lookup_term("neuron")
-        # Should not match because 'motor neuron' != 'neuron'
-        assert not result
-
-    def test_ols_empty_docs(self):
-        from ndi_ontology.providers import CLProvider
-
-        mock_response = {"response": {"docs": []}}
-        provider = CLProvider()
-        with patch.object(provider, "_http_get_json", return_value=mock_response):
-            result = provider.lookup_term("nonexistent")
-        assert not result
-
-    def test_ols_api_error(self):
+    def test_lookup_by_name_is_a_label_search(self):
         from ndi_ontology.providers import CLProvider
 
         provider = CLProvider()
-        with patch.object(provider, "_http_get_json", side_effect=Exception("API error")):
-            result = provider.lookup_term("540")
-        assert not result
+        fake = FakeOLS([ols_doc("CL", "0000540", "neuron")], [self.NEURON])
+        with patch.object(provider, "_http_get_json", side_effect=fake):
+            result = provider.lookup_term("Neuron")
+        assert fake.search_params == {"q": "Neuron", "ontology": "cl", "queryFields": "label"}
+        assert result.id == "CL:0000540"
 
-    def test_doc_to_result_fallback_short_form(self):
-        """When obo_id is empty, fall back to short_form."""
+    def test_one_exact_label_among_several_results(self):
         from ndi_ontology.providers import CLProvider
 
         provider = CLProvider()
-        doc = {
-            "obo_id": "",
-            "short_form": "CL_9999999",
-            "label": "test cell",
-            "description": ["A test"],
-            "synonym": [],
-        }
-        result = provider._doc_to_result(doc, "CL")
-        assert result.id == "CL:9999999"
+        docs = [ols_doc("CL", "0000100", "motor neuron"), ols_doc("CL", "0000540", "neuron")]
+        fake = FakeOLS(docs, [self.NEURON])
+        with patch.object(provider, "_http_get_json", side_effect=fake):
+            assert provider.lookup_term("neuron").id == "CL:0000540"
+
+    def test_several_exact_labels_raise_rather_than_picking_one(self):
+        """MATLAB: NotUnique. Python used to take the first."""
+        from ndi_ontology.providers import CLProvider
+
+        provider = CLProvider()
+        docs = [ols_doc("CL", "0000001", "neuron"), ols_doc("CL", "0000540", "Neuron")]
+        with patch.object(provider, "_http_get_json", side_effect=FakeOLS(docs)):
+            with pytest.raises(ValueError, match="2 exact matches"):
+                provider.lookup_term("neuron")
+
+    def test_an_id_search_must_find_exactly_one(self):
+        from ndi_ontology.providers import CLProvider
+
+        provider = CLProvider()
+        docs = [ols_doc("CL", "0000540", "neuron"), ols_doc("CL", "0000541", "other")]
+        with patch.object(provider, "_http_get_json", side_effect=FakeOLS(docs)):
+            with pytest.raises(ValueError, match="expected 1 for ID search"):
+                provider.lookup_term("0000540")
+
+    def test_no_exact_label_is_not_found(self):
+        from ndi_ontology.providers import CLProvider
+
+        provider = CLProvider()
+        fake = FakeOLS([ols_doc("CL", "0000100", "motor neuron")])
+        with patch.object(provider, "_http_get_json", side_effect=fake):
+            assert not provider.lookup_term("neuron")
+        assert not fake.term_urls
+
+    def test_no_results_is_not_found(self):
+        from ndi_ontology.providers import CLProvider
+
+        provider = CLProvider()
+        with patch.object(provider, "_http_get_json", side_effect=FakeOLS([])):
+            assert not provider.lookup_term("nonexistent")
+
+    def test_api_error_raises_rather_than_reading_as_not_found(self):
+        """MATLAB raises SearchAPIError; Python used to return an empty result."""
+        from ndi_ontology import NDIOntologyLookupError, clearCache, lookup
+        from ndi_ontology.providers import OLSProvider
+
+        clearCache()
+        with patch.object(OLSProvider, "_http_get_json", side_effect=OSError("API error")):
+            with pytest.raises(NDIOntologyLookupError, match="API error") as excinfo:
+                lookup("CL:0000540")
+        assert isinstance(excinfo.value.__cause__, OSError)
+
+    def test_remainder_repeating_the_prefix_is_unwrapped(self):
+        from ndi_ontology.providers import OLSProvider
+
+        assert OLSProvider.preprocessLookupInput("CL:0000540", "CL")[:2] == (
+            "CL:0000540",
+            "obo_id",
+        )
+        assert OLSProvider.preprocessLookupInput("cl: neuron ", "CL")[:2] == ("neuron", "label")
+
+    def test_om_branch_rejects_numbers_and_spaces_camel_case(self):
+        from ndi_ontology.providers import OLSProvider
+
+        assert OLSProvider.preprocessLookupInput("MolarVolumeUnit", "OM")[:2] == (
+            "molar volume unit",
+            "label",
+        )
+        with pytest.raises(ValueError, match="not supported for OM"):
+            OLSProvider.preprocessLookupInput("182", "OM")
+
+    @pytest.mark.parametrize(
+        "obo_id, short_form, expected",
+        [
+            ("CL:0000540", "CL_0000540", "CL:0000540"),  # obo_id with this prefix
+            ("", "CL_0000540", "CL:0000540"),  # short_form PREFIX_n
+            ("", "0000540", "CL:0000540"),  # bare number
+            ("format:1929", "format_1929", "format:1929"),  # raw obo_id, last resort
+        ],
+    )
+    def test_id_extraction_matches_performIriLookup(self, obo_id, short_form, expected):
+        from ndi_ontology.providers import CLProvider
+
+        provider = CLProvider()
+        record = {"iri": "x", "label": "neuron", "obo_id": obo_id, "short_form": short_form}
+        with patch.object(provider, "_http_get_json", return_value=record):
+            assert provider.performIriLookup("x", "cl", "CL").id == expected
 
     def test_numeric_id_passed_through_verbatim(self):
         """Numeric IDs go to OLS unpadded, as MATLAB sends them.
 
-        This test previously asserted the opposite -- that ``lookup_term("1")``
-        queries ``CL:0000001`` -- which encoded a defect. MATLAB's
-        preprocessLookupInput builds ``[ontology_prefix ':' numeric_id]`` with
-        no padding, and obo_id is an exact-match field, so padding to 7 digits
-        silently broke every ontology whose ids are not 7 digits: CHEBI:15377
-        was sent as CHEBI:0015377 and matched nothing. It was invisible because
-        the ontologies with 7-digit ids (CL, PATO, UBERON, EMPTY) padded to
-        themselves, and because lookup by name was unaffected.
+        CHEBI's ids are not 7 digits: padding sent CHEBI:0015377 for
+        CHEBI:15377 and matched nothing.
         """
-        from ndi_ontology.providers import CLProvider
-
-        provider = CLProvider()
-        mock_response = {
-            "response": {
-                "docs": [
-                    {
-                        "obo_id": "CL:0000001",
-                        "label": "cell",
-                        "short_form": "CL_0000001",
-                        "description": [],
-                        "synonym": [],
-                    }
-                ]
-            }
-        }
-        with patch.object(provider, "_http_get_json", return_value=mock_response) as mock_get:
-            provider.lookup_term("1")
-            args, kwargs = mock_get.call_args
-            assert kwargs["params"]["q"] == "CL:1"
-
-        # The case that padding broke: a CHEBI id is not 7 digits.
         from ndi_ontology.providers import CHEBIProvider
 
-        chebi = CHEBIProvider()
-        with patch.object(chebi, "_http_get_json", return_value=mock_response) as mock_get:
-            chebi.lookup_term("15377", "CHEBI")
-            args, kwargs = mock_get.call_args
-            assert kwargs["params"]["q"] == "CHEBI:15377"
+        provider = CHEBIProvider()
+        fake = FakeOLS(
+            [ols_doc("CHEBI", "15377", "water")], [ols_record("CHEBI", "15377", "water")]
+        )
+        with patch.object(provider, "_http_get_json", side_effect=fake):
+            provider.lookup_term("15377", "CHEBI")
+        assert fake.search_params["q"] == "CHEBI:15377"
 
 
 # ---------------------------------------------------------------------------
@@ -450,29 +511,16 @@ class TestOMProvider:
         from ndi_ontology.providers import OMProvider
 
         provider = OMProvider()
-        mock_response = {
-            "response": {
-                "docs": [
-                    {
-                        "obo_id": "OM:0001",
-                        "label": "milli metre",
-                        "short_form": "OM_0001",
-                        "description": [],
-                        "synonym": [],
-                    }
-                ]
-            }
-        }
+        fake = FakeOLS([])
         # OM's own file holds no match, so the lookup falls back to OLS.
         empty_index = {"local": [], "label": [], "definition": [], "alternative": [], "kind": []}
         with (
             patch.object(OMProvider, "fileIndex", return_value=empty_index),
-            patch.object(provider, "_http_get_json", return_value=mock_response) as mock_get,
+            patch.object(provider, "_http_get_json", side_effect=fake),
         ):
             provider.lookup_term("milliMetre")
-            # Should convert CamelCase to 'milli metre'
-            args, kwargs = mock_get.call_args
-            assert kwargs["params"]["q"] == "milli metre"
+        # Should convert CamelCase to 'milli metre'
+        assert fake.search_params["q"] == "milli metre"
 
     INDEX = {
         "local": ["metre", "second-Time"],
@@ -504,22 +552,31 @@ class TestOMProvider:
         provider = OMProvider()
         with (
             patch.object(OMProvider, "fileIndex") as mock_index,
-            patch.object(provider, "_http_get_json", return_value={"response": {"docs": []}}),
+            patch.object(provider, "_http_get_json") as mock_get,
         ):
-            assert not provider.lookup_term("182", "OM")
+            # MATLAB's preprocessLookupInput rejects a numeric OM id outright
+            with pytest.raises(ValueError, match="not supported for OM"):
+                provider.lookup_term("182", "OM")
         mock_index.assert_not_called()
+        mock_get.assert_not_called()
 
     def test_unreadable_file_warns_and_falls_back_to_ols(self):
         from ndi_ontology.providers import OMProvider
 
         provider = OMProvider()
-        doc = {"obo_id": "", "label": "molar volume unit", "short_form": "MolarVolumeUnit"}
+        doc = {
+            "iri": "http://www.ontology-of-units-of-measure.org/resource/om-2/MolarVolumeUnit",
+            "obo_id": "OM:MolarVolumeUnit",
+            "label": "molar volume unit",
+            "short_form": "MolarVolumeUnit",
+        }
         with (
             patch.object(OMProvider, "fileIndex", side_effect=OSError("offline")),
-            patch.object(provider, "_http_get_json", return_value={"response": {"docs": [doc]}}),
+            patch.object(provider, "_http_get_json", side_effect=FakeOLS([doc], [doc])),
             pytest.warns(UserWarning, match="falling back to OLS"),
         ):
             result = provider.lookup_term("MolarVolumeUnit", "OM")
+        assert result.id == "OM:MolarVolumeUnit"
         assert result.name == "molar volume unit"
 
     def test_file_index_is_downloaded_once_and_cleared_by_clearCache(self):
@@ -605,7 +662,14 @@ class TestNDICProvider:
 
 
 class TestNCImProvider:
-    """Tests for NCI Metathesaurus provider."""
+    """NCIm against MATLAB NCIm.m; the EVS API is mocked."""
+
+    DETAIL = {
+        "code": "C0027947",
+        "name": "ndi_neuron",
+        "definitions": [{"definition": "A nerve cell"}],
+        "synonyms": [{"name": "Nerve Cell"}, {"name": ""}, {"name": "Neural Cell"}],
+    }
 
     def test_cui_pattern_match(self):
         from ndi_ontology.providers import NCImProvider
@@ -619,43 +683,69 @@ class TestNCImProvider:
         from ndi_ontology.providers import NCImProvider
 
         provider = NCImProvider()
-        mock_data = {
-            "code": "C0027947",
-            "name": "ndi_neuron",
-            "definitions": [{"definition": "A nerve cell"}],
-            "synonyms": [{"name": "Nerve Cell"}, {"name": "Neural Cell"}],
-        }
-        with patch.object(provider, "_http_get_json", return_value=mock_data):
+        with patch.object(provider, "_http_get_json", return_value=self.DETAIL):
             result = provider.lookup_term("C0027947")
         assert result.id == "C0027947"
         assert result.name == "ndi_neuron"
         assert result.definition == "A nerve cell"
-        assert "Nerve Cell" in result.synonyms
+        assert result.synonyms == ["Nerve Cell", "Neural Cell"]
 
-    def test_name_search(self):
+    def test_name_search_needs_exactly_one_match(self):
         from ndi_ontology.providers import NCImProvider
 
         provider = NCImProvider()
-        search_data = {
-            "concepts": [{"code": "C0027947"}],
-        }
-        detail_data = {
-            "code": "C0027947",
-            "name": "ndi_neuron",
-            "definitions": [],
-            "synonyms": [],
-        }
-        with patch.object(provider, "_http_get_json", side_effect=[search_data, detail_data]):
+        search = {"total": 1, "concepts": [{"code": "C0027947"}]}
+        with patch.object(
+            provider, "_http_get_json", side_effect=[search, self.DETAIL]
+        ) as mock_get:
             result = provider.lookup_term("ndi_neuron")
         assert result.id == "C0027947"
+        assert mock_get.call_args_list[0].kwargs["params"] == {
+            "term": "ndi_neuron",
+            "terminology": "ncim",
+            "type": "match",
+            "include": "minimal",
+        }
 
-    def test_api_error(self):
+    def test_several_matches_raise_rather_than_picking_one(self):
         from ndi_ontology.providers import NCImProvider
 
         provider = NCImProvider()
-        with patch.object(provider, "_http_get_json", side_effect=Exception("error")):
-            result = provider.lookup_term("C0027947")
-        assert not result
+        search = {"total": 2, "concepts": [{"code": "C0000001"}, {"code": "C0000002"}]}
+        with patch.object(provider, "_http_get_json", return_value=search):
+            with pytest.raises(ValueError, match="2 exact matches"):
+                provider.lookup_term("ambiguous")
+
+    def test_no_match_is_not_found(self):
+        from ndi_ontology.providers import NCImProvider
+
+        provider = NCImProvider()
+        with patch.object(provider, "_http_get_json", return_value={"total": 0}):
+            assert not provider.lookup_term("NoSuchConcept")
+
+    def test_unknown_cui_is_not_found(self):
+        from ndi_ontology.providers import NCImProvider
+
+        provider = NCImProvider()
+        with patch.object(provider, "_http_get_json", side_effect=_http_error(404)):
+            assert not provider.lookup_term("C9999999")
+
+    def test_api_error_raises(self):
+        from ndi_ontology.providers import NCImProvider
+
+        provider = NCImProvider()
+        with patch.object(provider, "_http_get_json", side_effect=_http_error(500)):
+            with pytest.raises(Exception, match="500"):
+                provider.lookup_term("C0027947")
+
+
+def _http_error(status):
+    """A requests HTTPError carrying STATUS, as raise_for_status raises it."""
+    import requests
+
+    response = requests.Response()
+    response.status_code = status
+    return requests.HTTPError(f"{status} Error", response=response)
 
 
 # ---------------------------------------------------------------------------
@@ -705,13 +795,37 @@ class TestNCBITaxonProvider:
             result = provider.lookup_term("Mus musculus")
         assert result.id == "NCBITaxon:10090"
 
-    def test_api_error(self):
+    def test_api_error_raises(self):
+        """MATLAB raises FetchAPIError; Python used to return an empty result."""
         from ndi_ontology.providers import NCBITaxonProvider
 
         provider = NCBITaxonProvider()
-        with patch("requests.get", side_effect=Exception("timeout")):
-            result = provider.lookup_term("10090")
-        assert not result
+        with patch("requests.get", side_effect=OSError("timeout")):
+            with pytest.raises(OSError, match="timeout"):
+                provider.lookup_term("10090")
+
+    def test_unknown_taxid_is_not_found(self):
+        from ndi_ontology.providers import NCBITaxonProvider
+
+        provider = NCBITaxonProvider()
+        with patch("requests.get", return_value=MagicMock(text="<TaxaSet></TaxaSet>")):
+            assert not provider.lookup_term("999999999")
+
+    def test_name_ncbi_does_not_know_is_not_found(self):
+        from ndi_ontology.providers import NCBITaxonProvider
+
+        provider = NCBITaxonProvider()
+        xml = "<eSearchResult><Count>0</Count><IdList></IdList></eSearchResult>"
+        with patch("requests.get", return_value=MagicMock(text=xml)):
+            assert not provider.lookup_term("No such species")
+
+    def test_unexpected_search_response_raises(self):
+        from ndi_ontology.providers import NCBITaxonProvider
+
+        provider = NCBITaxonProvider()
+        with patch("requests.get", return_value=MagicMock(text="<eSearchResult/>")):
+            with pytest.raises(ValueError, match="Unexpected/empty esearch"):
+                provider.lookup_term("Mus musculus")
 
 
 # ---------------------------------------------------------------------------
@@ -720,52 +834,105 @@ class TestNCBITaxonProvider:
 
 
 class TestPubChemProvider:
-    """Tests for PubChem provider."""
+    """PubChem against MATLAB PubChem.m; PUG REST is mocked."""
+
+    TITLE = {"PropertyTable": {"Properties": [{"Title": "Aspirin"}]}}
+    DESC = {"InformationList": {"Information": [{"Description": "An NSAID"}]}}
+    SYNS = {"InformationList": {"Information": [{"Synonym": [f"s{i}" for i in range(15)]}]}}
 
     def test_cid_numeric_lookup(self):
         from ndi_ontology.providers import PubChemProvider
 
         provider = PubChemProvider()
-        title_data = {"PropertyTable": {"Properties": [{"Title": "Aspirin"}]}}
-        desc_data = {"InformationList": {"Information": [{"Description": "An NSAID"}]}}
-        syn_data = {"InformationList": {"Information": [{"Synonym": ["acetylsalicylic acid"]}]}}
         with patch.object(
-            provider, "_http_get_json", side_effect=[title_data, desc_data, syn_data]
+            provider, "_http_get_json", side_effect=[self.TITLE, self.DESC, self.SYNS]
         ):
             result = provider.lookup_term("2244")
         assert result.id == "2244"
         assert result.name == "Aspirin"
+        assert result.definition == "An NSAID"
+        # all of them; Python used to keep only the first 10
+        assert len(result.synonyms) == 15
 
     def test_cid_prefix_lookup(self):
         from ndi_ontology.providers import PubChemProvider
 
         provider = PubChemProvider()
-        title_data = {"PropertyTable": {"Properties": [{"Title": "Water"}]}}
-        with patch.object(
-            provider, "_http_get_json", side_effect=[title_data, Exception, Exception]
+        with (
+            patch.object(
+                provider,
+                "_http_get_json",
+                side_effect=[self.TITLE, _http_error(500), _http_error(500)],
+            ),
+            pytest.warns(UserWarning, match="Could not fetch"),
         ):
-            result = provider.lookup_term("CID:962")
+            result = provider.lookup_term("cid 962")
         assert result.id == "962"
+
+    def test_cid_followed_by_anything_but_digits_raises(self):
+        """MATLAB: InvalidCidPrefixFormat -- 'CID:962' included."""
+        from ndi_ontology.providers import PubChemProvider
+
+        provider = PubChemProvider()
+        with patch.object(provider, "_http_get_json") as mock_get:
+            with pytest.raises(ValueError, match="starts with"):
+                provider.lookup_term("CID:962")
+        mock_get.assert_not_called()
+
+    def test_name_falls_back_to_first_synonym(self):
+        from ndi_ontology.providers import PubChemProvider
+
+        provider = PubChemProvider()
+        with (
+            patch.object(provider, "_http_get_json", side_effect=[_http_error(500), {}, self.SYNS]),
+            pytest.warns(UserWarning),
+        ):
+            assert provider.lookup_term("2244").name == "s0"
 
     def test_name_search(self):
         from ndi_ontology.providers import PubChemProvider
 
         provider = PubChemProvider()
-        search_data = {"IdentifierList": {"CID": [2244]}}
-        title_data = {"PropertyTable": {"Properties": [{"Title": "Aspirin"}]}}
+        search = {"IdentifierList": {"CID": [2244]}}
         with patch.object(
-            provider, "_http_get_json", side_effect=[search_data, title_data, Exception, Exception]
+            provider, "_http_get_json", side_effect=[search, self.TITLE, self.DESC, self.SYNS]
         ):
             result = provider.lookup_term("Aspirin")
         assert result.id == "2244"
 
-    def test_api_error(self):
+    def test_name_matching_several_cids_raises(self):
         from ndi_ontology.providers import PubChemProvider
 
         provider = PubChemProvider()
-        with patch.object(provider, "_http_get_json", side_effect=Exception("error")):
-            result = provider.lookup_term("2244")
-        assert not result
+        search = {"IdentifierList": {"CID": [1, 2]}}
+        with patch.object(provider, "_http_get_json", return_value=search):
+            with pytest.raises(ValueError, match="multiple"):
+                provider.lookup_term("ambiguous")
+
+    def test_unknown_name_is_not_found(self):
+        from ndi_ontology.providers import PubChemProvider
+
+        provider = PubChemProvider()
+        with patch.object(provider, "_http_get_json", side_effect=_http_error(404)):
+            assert not provider.lookup_term("NoSuchCompound")
+
+    def test_unknown_cid_is_not_found(self):
+        from ndi_ontology.providers import PubChemProvider
+
+        provider = PubChemProvider()
+        with (
+            patch.object(provider, "_http_get_json", side_effect=_http_error(404)),
+            pytest.warns(UserWarning),
+        ):
+            assert not provider.lookup_term("99999999999")
+
+    def test_api_error_on_name_search_raises(self):
+        from ndi_ontology.providers import PubChemProvider
+
+        provider = PubChemProvider()
+        with patch.object(provider, "_http_get_json", side_effect=_http_error(500)):
+            with pytest.raises(Exception, match="500"):
+                provider.lookup_term("Aspirin")
 
 
 # ---------------------------------------------------------------------------
@@ -774,40 +941,68 @@ class TestPubChemProvider:
 
 
 class TestRRIDProvider:
-    """Tests for RRID provider."""
+    """RRID against MATLAB RRID.m; the SciCrunch resolver is mocked."""
+
+    HIT = {
+        "hits": {
+            "hits": [
+                {
+                    "_source": {
+                        "item": {
+                            "name": "Mouse anti-NeuN",
+                            "description": "A neuronal marker antibody",
+                            "synonyms": ["anti-NeuN"],
+                        },
+                        "organisms": {
+                            "primary": [
+                                {
+                                    "species": {"name": "Mus musculus"},
+                                    "common": {"name": "mouse"},
+                                }
+                            ]
+                        },
+                    }
+                }
+            ]
+        }
+    }
 
     def test_lookup(self):
         from ndi_ontology.providers import RRIDProvider
 
         provider = RRIDProvider()
-        mock_data = {
-            "hits": {
-                "hits": [
-                    {
-                        "_source": {
-                            "item": {
-                                "name": "Mouse anti-NeuN",
-                                "description": "A neuronal marker antibody",
-                                "synonyms": ["anti-NeuN"],
-                            }
-                        }
-                    }
-                ]
-            }
-        }
-        with patch.object(provider, "_http_get_json", return_value=mock_data):
-            result = provider.lookup_term("AB_123456")
+        with patch.object(provider, "_http_get_json", return_value=self.HIT) as mock_get:
+            result = provider.lookup_term(" AB_123456 ")
+        assert mock_get.call_args.args[0] == (
+            "https://scicrunch.org/resolver/RRID%3AAB_123456.json"
+        )
         assert result.id == "RRID:AB_123456"
         assert result.name == "Mouse anti-NeuN"
+        assert result.synonyms == ["anti-NeuN"]
+
+    def test_lookupSpecies(self):
+        from ndi_ontology.providers import RRIDProvider
+
+        provider = RRIDProvider()
+        with patch.object(provider, "_http_get_json", return_value=self.HIT):
+            assert provider.lookupSpecies("AB_123456") == ("Mus musculus", "mouse")
 
     def test_not_found(self):
         from ndi_ontology.providers import RRIDProvider
 
         provider = RRIDProvider()
-        mock_data = {"hits": {"hits": []}}
-        with patch.object(provider, "_http_get_json", return_value=mock_data):
+        with patch.object(provider, "_http_get_json", return_value={"hits": {"hits": []}}):
             result = provider.lookup_term("AB_000000")
         assert not result
+
+    def test_api_error_raises(self):
+        """MATLAB rethrows; Python used to return an empty result."""
+        from ndi_ontology.providers import RRIDProvider
+
+        provider = RRIDProvider()
+        with patch.object(provider, "_http_get_json", side_effect=_http_error(503)):
+            with pytest.raises(Exception, match="503"):
+                provider.lookup_term("AB_123456")
 
 
 # ---------------------------------------------------------------------------
@@ -1259,25 +1454,16 @@ class TestOLSPortedProviders:
         from ndi_ontology.providers import UberonProvider
 
         provider = UberonProvider()
-        response = {
-            "response": {
-                "docs": [
-                    {
-                        "obo_id": "UBERON:0000948",
-                        "label": "heart",
-                        "short_form": "UBERON_0000948",
-                        "description": ["a hollow muscular organ"],
-                        "synonym": ["chambered heart"],
-                    }
-                ]
-            }
-        }
-        with patch.object(provider, "_http_get_json", return_value=response) as mock_get:
+        fake = FakeOLS(
+            [ols_doc("UBERON", "0000948", "heart")],
+            [ols_record("UBERON", "0000948", "heart", synonyms=["chambered heart"])],
+        )
+        with patch.object(provider, "_http_get_json", side_effect=fake):
             result = provider.lookup_term("0000948", "UBERON")
 
-        _args, kwargs = mock_get.call_args
-        assert kwargs["params"]["ontology"] == "uberon"
-        assert kwargs["params"]["q"] == "UBERON:0000948"
+        assert fake.search_params["ontology"] == "uberon"
+        assert fake.search_params["q"] == "UBERON:0000948"
+        assert "/ontologies/uberon/terms/" in fake.term_urls[0]
         assert result.id == "UBERON:0000948"
         assert result.name == "heart"
 
@@ -1285,31 +1471,20 @@ class TestOLSPortedProviders:
         from ndi_ontology.providers import STATOProvider
 
         provider = STATOProvider()
-        response = {
-            "response": {
-                "docs": [
-                    {
-                        "obo_id": "STATO:0000700",
-                        "label": "p-value",
-                        "short_form": "STATO_0000700",
-                        "description": [],
-                        "synonym": [],
-                    }
-                ]
-            }
-        }
-        with patch.object(provider, "_http_get_json", return_value=response) as mock_get:
+        fake = FakeOLS(
+            [ols_doc("STATO", "0000700", "p-value")], [ols_record("STATO", "0000700", "p-value")]
+        )
+        with patch.object(provider, "_http_get_json", side_effect=fake):
             result = provider.lookup_term("p-value", "STATO")
 
-        _args, kwargs = mock_get.call_args
-        assert kwargs["params"]["queryFields"] == "label"
+        assert fake.search_params["queryFields"] == "label"
         assert result.id == "STATO:0000700"
 
     def test_not_found_is_empty(self):
         from ndi_ontology.providers import NCITProvider
 
         provider = NCITProvider()
-        with patch.object(provider, "_http_get_json", return_value={"response": {"docs": []}}):
+        with patch.object(provider, "_http_get_json", side_effect=FakeOLS([])):
             assert not provider.lookup_term("NoSuchTerm", "NCIT")
 
 

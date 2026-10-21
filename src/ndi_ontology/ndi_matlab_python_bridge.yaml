@@ -179,6 +179,9 @@ classes:
           'taxonomy:9606'). NDI-python names treatment columns in its subject
           tables from shortName, so the same dataset got different columns
           in each language. The shared-case runner now asserts both fields.
+          FIXED 2026-10-21 (#11 item 2): the prefix and the remainder are
+          both trimmed, as getOntologyNameFromPrefix does (ontology.m:491), so
+          ' CL : 0000540 ' resolves where Python used to reject the prefix.
 
       # --- Instance: lookupTermOrID ---
       - name: lookupTermOrID
@@ -264,39 +267,72 @@ classes:
       # --- Static: performIriLookup ---
       - name: performIriLookup
         kind: static
+        python_name: "OLSProvider.performIriLookup"
         input_arguments:
-          - name: iri
-            type_matlab: "char"
+          - name: term_iri
+            type_python: "str"
+          - name: ontology_name_ols
+            type_python: "str"
+          - name: ontology_prefix
             type_python: "str"
         output_arguments:
-          - name: result
+          - name: "[id, name, definition, synonyms]"
             type_python: "OntologyResult"
         decision_log: >
-          Python implements IRI-based lookup inside OLSProvider subclasses.
-          Not exposed as a separate public function.
-          Documented for completeness.
+          PORTED 2026-10-21 (#11 item 2) against ontology.m at 44efcec, as an
+          OLSProvider method (it uses the provider's HTTP helper). Reads the
+          term record from /ols4/api/ontologies/<ont>/terms/<IRI encoded
+          twice>; id from obo_id when it carries the prefix, else from
+          short_form (PREFIX_n, bare digits, PREFIX:n), else the raw obo_id;
+          definition the first non-empty description; synonyms the
+          obo_synonym names. Previously not ported: Python read the search
+          result instead, which carries no synonyms.
 
       # --- Static: searchOLSAndPerformIRILookup ---
       - name: searchOLSAndPerformIRILookup
         kind: static
+        python_name: "OLSProvider.searchOLSAndPerformIRILookup"
         input_arguments:
-          - name: term
-            type_matlab: "char"
+          - name: search_query
             type_python: "str"
-          - name: ontology
-            type_matlab: "char"
+          - name: search_field
+            type_python: "str ('obo_id' or 'label')"
+          - name: ontology_name_ols
             type_python: "str"
-          - name: queryFields
-            type_matlab: "char"
+          - name: ontology_prefix
             type_python: "str"
-            default: "'label'"
+          - name: lookup_type_msg
+            type_python: "str"
         output_arguments:
-          - name: result
+          - name: "[id, name, definition, synonyms]"
             type_python: "OntologyResult"
         decision_log: >
-          Python implements this inside OLSProvider._search_ols().
-          Not exposed as a separate public function.
-          Documented for completeness.
+          PORTED 2026-10-21 (#11 item 2) against ontology.m at 44efcec, as an
+          OLSProvider method. An id search must return exactly one result; a
+          label search must name exactly one result whose label equals the
+          query ignoring case. MATLAB's NotFound and MismatchOnSingleResult
+          are an empty result (lookup() raises on it); NotUnique and API
+          errors raise. Replaces OLSProvider._search_ols, which took the first
+          match and swallowed every error.
+
+      # --- Static: preprocessLookupInput ---
+      - name: preprocessLookupInput
+        kind: static
+        python_name: "OLSProvider.preprocessLookupInput"
+        input_arguments:
+          - name: term_or_id_or_name
+            type_python: "str"
+          - name: ontology_prefix
+            type_python: "str"
+        output_arguments:
+          - name: "[search_query, search_field, lookup_type_msg]"
+            type_python: "tuple[str, str, str]"
+        decision_log: >
+          PORTED 2026-10-21 (#11 item 2) against ontology.m at 44efcec,
+          including the OM branch and convertComponentToLabel_OMHeuristic
+          (also ported, as OLSProvider.convertComponentToLabel_OMHeuristic).
+          MATLAB's fourth output, original_input, is the caller's own argument
+          and is not returned. INTERFACE UPDATE: newly added to the bridge.
 
       # --- Static: lookupOBOFile ---
       - name: lookupOBOFile
@@ -349,11 +385,19 @@ providers:
     python_class: "CLProvider"
     inherits: "OLSProvider"
     status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      NOT EXAMINED against CL.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against CL.m at 8e109b0 and ontology.m at
+      44efcec (2026-10-21, #11 item 2). CL.m sets only ontology_prefix
+      'CL' and ontology_name_ols 'cl' and defers to ontology.m's
+      shared helpers, which OLSProvider now ports under their MATLAB names
+      (preprocessLookupInput, searchOLSAndPerformIRILookup,
+      performIriLookup -- see the ontology entry's methods). Before that,
+      Python's single-request search took the first hit where MATLAB
+      requires a unique one, read its fields from the search result rather
+      than the term record (so synonyms were always empty), and swallowed
+      every error into "not found".
 
   - name: CHEBI
     matlab_path: "src/ndi/+ndi/+ontology/CHEBI.m"
@@ -361,22 +405,22 @@ providers:
     python_class: "CHEBIProvider"
     inherits: "OLSProvider"
     status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
-    matlab_examined: partial
     sync_status: >
-      ID-HANDLING PATH EXAMINED against ontology.m at 9d9b4e1 (2026-09-02);
-      the rest of CHEBI.m at 8e109b0 is still unexamined.
-      MATLAB's preprocessLookupInput (ontology.m:395) builds the OLS query
-      as `[ontology_prefix ':' numeric_id]` -- the numeric id verbatim,
-      with no padding. Python padded it with term.zfill(7); FIXED
-      2026-09-02 to pass through. The padding was a no-op for every
-      ontology whose ids are 7 digits (CL, PATO, Uberon, EMPTY), which is
-      why it went unnoticed, and wrong for CHEBI, whose are not: every
-      lookup by id sent CHEBI:0015377 for CHEBI:15377 and matched nothing,
-      while lookup by name kept working. Found by the shared case table's
-      first live run in CI. The fix is in OLSProvider, so it applies to
-      CL, PATO, EFO, SNOMED and OM as well; only CHEBI was affected.
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against CHEBI.m at 8e109b0 and ontology.m at
+      44efcec (2026-10-21, #11 item 2). CHEBI.m sets only ontology_prefix
+      'CHEBI' and ontology_name_ols 'chebi' and defers to ontology.m's
+      shared helpers, which OLSProvider now ports under their MATLAB names
+      (preprocessLookupInput, searchOLSAndPerformIRILookup,
+      performIriLookup -- see the ontology entry's methods). Before that,
+      Python's single-request search took the first hit where MATLAB
+      requires a unique one, read its fields from the search result rather
+      than the term record (so synonyms were always empty), and swallowed
+      every error into "not found".
+      Earlier (2026-09-02): the numeric id was padded with zfill(7), so
+      CHEBI:15377 was sent as CHEBI:0015377 and matched nothing; fixed then,
+      and preprocessLookupInput now builds the query exactly as MATLAB does.
 
   - name: PATO
     matlab_path: "src/ndi/+ndi/+ontology/PATO.m"
@@ -384,11 +428,19 @@ providers:
     python_class: "PATOProvider"
     inherits: "OLSProvider"
     status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      NOT EXAMINED against PATO.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against PATO.m at 8e109b0 and ontology.m at
+      44efcec (2026-10-21, #11 item 2). PATO.m sets only ontology_prefix
+      'PATO' and ontology_name_ols 'pato' and defers to ontology.m's
+      shared helpers, which OLSProvider now ports under their MATLAB names
+      (preprocessLookupInput, searchOLSAndPerformIRILookup,
+      performIriLookup -- see the ontology entry's methods). Before that,
+      Python's single-request search took the first hit where MATLAB
+      requires a unique one, read its fields from the search result rather
+      than the term record (so synonyms were always empty), and swallowed
+      every error into "not found".
 
   - name: EFO
     matlab_path: "src/ndi/+ndi/+ontology/EFO.m"
@@ -396,11 +448,21 @@ providers:
     python_class: "EFOProvider"
     inherits: "OLSProvider"
     status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      NOT EXAMINED against EFO.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against EFO.m at 8e109b0 and ontology.m at
+      44efcec (2026-10-21, #11 item 2). EFO.m sets only ontology_prefix
+      'EFO' and ontology_name_ols 'efo' and defers to ontology.m's
+      shared helpers, which OLSProvider now ports under their MATLAB names
+      (preprocessLookupInput, searchOLSAndPerformIRILookup,
+      performIriLookup -- see the ontology entry's methods). Before that,
+      Python's single-request search took the first hit where MATLAB
+      requires a unique one, read its fields from the search result rather
+      than the term record (so synonyms were always empty), and swallowed
+      every error into "not found".
+      The shared case table has no EFO cases, so nothing checks this live
+      (#11 item 4).
 
   - name: SNOMED
     matlab_path: "src/ndi/+ndi/+ontology/SNOMED.m"
@@ -408,11 +470,21 @@ providers:
     python_class: "SNOMEDProvider"
     inherits: "OLSProvider"
     status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      NOT EXAMINED against SNOMED.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against SNOMED.m at 8e109b0 and ontology.m at
+      44efcec (2026-10-21, #11 item 2). SNOMED.m sets only ontology_prefix
+      'SNOMED' and ontology_name_ols 'snomed' and defers to ontology.m's
+      shared helpers, which OLSProvider now ports under their MATLAB names
+      (preprocessLookupInput, searchOLSAndPerformIRILookup,
+      performIriLookup -- see the ontology entry's methods). Before that,
+      Python's single-request search took the first hit where MATLAB
+      requires a unique one, read its fields from the search result rather
+      than the term record (so synonyms were always empty), and swallowed
+      every error into "not found".
+      The shared case table has no SNOMED cases, so nothing checks this live
+      (#11 item 4).
 
   - name: OM
     matlab_path: "src/ndi/+ndi/+ontology/OM.m"
@@ -420,12 +492,16 @@ providers:
     python_class: "OMProvider"
     inherits: "OLSProvider"
     status: ported
-    matlab_examined: partial
+    matlab_examined: true
     matlab_last_sync_hash: "ddbd1d0"
     sync_status: >
-      STEP 0 EXAMINED and PORTED against OM.m at ddbd1d0 (2026-10-20); the OLS
-      fallback (OM's branch of preprocessLookupInput) is still the pre-split
-      Python and not re-examined.
+      EXAMINED and PORTED against OM.m at ddbd1d0 (2026-10-20) and, for the
+      OLS fallback, ontology.m at 44efcec (2026-10-21, #11 item 2). The
+      fallback is now MATLAB's steps 1-2: preprocessLookupInput's OM branch
+      (numeric ids rejected, the term turned into a label by
+      convertComponentToLabel_OMHeuristic) and the shared
+      searchOLSAndPerformIRILookup. A numeric OM term now raises, as in
+      MATLAB, rather than searching OLS for the digits.
       OM's units are individuals (om:metre is an om:Unit), which OLS does not
       index, so OM.m (since 44efcec) reads OM's own RDF file first:
       fileIndex downloads RDF_URL once per session, parseRDF indexes every
@@ -484,7 +560,6 @@ providers:
     sync_status: >
       EXAMINED against NDIC.m at 73e71fc (2026-09-02).
       MATLAB returns the BARE identifier: NDIC.m:67 is `id = num2str(ndicData.Identifier(rowIndex))`, the prefix having been stripped before dispatch (NDIC.m:21). Python returned 'NDIC:8'; FIXED 2026-09-02 to return '8'. Found by the shared case table on its first run, offline.
-      never checked against this MATLAB class.
 
   - name: NCIm
     matlab_path: "src/ndi/+ndi/+ontology/NCIm.m"
@@ -492,12 +567,28 @@ providers:
     python_class: "NCImProvider"
     inherits: "OntologyProvider"
     status: ported
-    matlab_last_sync_hash: "8e109b0"
     matlab_examined: true
+    matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      EXAMINED against NCIm.m at 8e109b0 (2026-09-02).
-      MATLAB returns the BARE concept code: NCIm.m:138 is `id = char(data.code)`. Python returned 'NCIm:C0018787'; FIXED 2026-09-02 to return 'C0018787'. Same defect as NDIC, found by reading the case table's expected_id column after the NDIC failure.
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against NCIm.m at 8e109b0 (2026-10-21, #11 item 2).
+      A CUI (^C\d{7}$) is read with performNcimIdLookup (ported under that
+      name); a name is an EVS 'match' search with include=minimal that must
+      report exactly one concept, whose code must be a CUI, before it is read.
+      Fixed against the earlier Python: a name with several matches took the
+      first rather than raising NameNotUnique; every error, transport ones
+      included, was swallowed into "not found"; the id was the record's code
+      where MATLAB keeps the CUI asked for (warning if they differ). A 404 on
+      a CUI is "not found", as MATLAB's CUINotFound.
+    methods:
+      - name: performNcimIdLookup
+        kind: static
+        python_name: "NCImProvider.performNcimIdLookup"
+        input_arguments:
+          - name: cui
+            type_python: "str"
+        output_arguments:
+          - name: "[id, name, definition, synonyms]"
+            type_python: "OntologyResult"
 
   - name: NCBITaxon
     matlab_path: "src/ndi/+ndi/+ontology/NCBITaxon.m"
@@ -505,10 +596,20 @@ providers:
     python_class: "NCBITaxonProvider"
     inherits: "OntologyProvider"
     status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "0c18bf8"
     sync_status: >
-      SYNONYMS EXAMINED against NCBITaxon.m at 0c18bf8 (2026-10-14); the id
-      and name-search paths are still NOT EXAMINED.
+      EXAMINED against NCBITaxon.m at 0c18bf8: synonyms 2026-10-14, the id
+      and name-search paths 2026-10-21 (#11 item 2). Fixed then: every error
+      was swallowed into "not found"; an esearch response with no ids is now
+      "not found" only when NCBI says so (<ErrorList>, <PhraseNotFound>,
+      <Count>0</Count>) and raises otherwise, as MATLAB's
+      InvalidSearchResponse; a TaxID the search found but efetch cannot read
+      raises (PostSearchLookupFailed). Kept: the first <Id> of the search is
+      used. MATLAB's regex '<IdList>.*?<Id>(\d+)</Id>.*?</IdList>' spans the
+      whole list, so it captures one id and its NameNotUnique branch cannot
+      fire -- an upstream bug worth reporting, mirrored here rather than
+      "fixed" on one side only.
       MATLAB's synonyms now come from the static parseOtherNames, ported as
       NCBITaxonProvider.parseOtherNames under its MATLAB name, with the same
       regular expressions, kept kinds and order (tagged elements first, then
@@ -576,11 +677,35 @@ providers:
     python_class: "RRIDProvider"
     inherits: "OntologyProvider"
     status: ported
+    matlab_examined: true
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      NOT EXAMINED against RRID.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against RRID.m at 8e109b0 (2026-10-21, #11 item 2).
+      Resolves https://scicrunch.org/resolver/<urlencode('RRID:'+term)>.json
+      and reads the first hit. Fixed against the earlier Python: errors were
+      swallowed where MATLAB rethrows; the RRID was not URL-encoded; synonyms
+      given as a struct were dropped; and lookupSpecies -- a public method of
+      RRID.m -- was not ported at all. One recorded difference: a resolver
+      answer with no hits is an empty result, which lookup() raises on, where
+      MATLAB returns blank fields without error (AGENTS.md section 4).
+    methods:
+      - name: lookupSpecies
+        python_name: "RRIDProvider.lookupSpecies"
+        input_arguments:
+          - name: term_or_id_or_name
+            type_python: "str"
+        output_arguments:
+          - name: "[scientificName, commonName]"
+            type_python: "tuple[str | list[str], str]"
+      - name: performRridResolverLookup
+        kind: static
+        python_name: "RRIDProvider.performRridResolverLookup"
+        input_arguments:
+          - name: full_rrid
+            type_python: "str"
+        output_arguments:
+          - name: "[id, name, definition, synonyms, scientificName, commonName]"
+            type_python: "tuple"
 
   - name: PubChem
     matlab_path: "src/ndi/+ndi/+ontology/PubChem.m"
@@ -588,12 +713,34 @@ providers:
     python_class: "PubChemProvider"
     inherits: "OntologyProvider"
     status: ported
-    matlab_last_sync_hash: "8e109b0"
     matlab_examined: true
+    matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      EXAMINED against PubChem.m at 8e109b0 (2026-09-02).
-      MATLAB returns the BARE CID: PubChem.m:148 is `id = char(cid)`. Python returned 'PubChem:2244'; FIXED 2026-09-02 to return '2244'. Same defect as NDIC and NCIm.
-      never checked against this MATLAB class.
+      EXAMINED and PORTED against PubChem.m at 8e109b0 (2026-10-21, #11 item 2).
+      A CID is bare digits or 'cid' followed (after trimming) by digits; a
+      name must resolve to exactly one CID. performPubChemCidLookup (ported
+      under that name) makes three tolerant requests -- title, description,
+      synonyms -- each warning on failure; the name falls back to the first
+      synonym; only a 404 with nothing retrieved is "not found".
+      Fixed against the earlier Python: a name matching several CIDs took
+      the first rather than raising NameNotUnique; synonyms were cut to 10;
+      a failed title request failed the whole lookup; errors were swallowed.
+      BEHAVIOUR CHANGE, matching MATLAB: 'cid:962' (and 'CID:962') now
+      raises InvalidCidPrefixFormat -- after 'cid' MATLAB accepts only
+      digits -- where Python used to strip the colon. 'cid 962' and '962'
+      work. Note for upstream: by the same rule MATLAB cannot look up a
+      compound whose name begins with 'cid' (cidofovir), and neither can
+      Python now.
+    methods:
+      - name: performPubChemCidLookup
+        kind: static
+        python_name: "PubChemProvider.performPubChemCidLookup"
+        input_arguments:
+          - name: cid
+            type_python: "str"
+        output_arguments:
+          - name: "[id, name, definition, synonyms]"
+            type_python: "OntologyResult"
 
   - name: EMPTY
     matlab_path: "src/ndi/+ndi/+ontology/EMPTY.m"

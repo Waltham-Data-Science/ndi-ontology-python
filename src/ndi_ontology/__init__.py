@@ -225,7 +225,9 @@ def lookup(lookup_string: str) -> OntologyResult:
             f"{lookup_string!r} has no ontology prefix; expected 'PREFIX:term'"
         )
 
-    prefix, remainder = lookup_string.split(":", 1)
+    # MATLAB's getOntologyNameFromPrefix trims both sides of the first colon
+    # (ontology.m:491), so ' CL : 0000540 ' is CL:0000540.
+    prefix, remainder = (part.strip() for part in lookup_string.split(":", 1))
 
     prefix_map = _load_prefix_map()
 
@@ -274,7 +276,7 @@ def lookup(lookup_string: str) -> OntologyResult:
     # NDI's subject tables name treatment columns with it, so a provider
     # returning OLS's short_form or '' gave Python different columns from
     # MATLAB for the same dataset.
-    result.prefix = prefix.strip()
+    result.prefix = prefix
     result.synonyms = [
         s
         for item in result.synonyms

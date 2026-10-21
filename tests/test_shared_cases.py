@@ -56,8 +56,8 @@ CASE_FILE_RELPATH = Path("tests/+ndi/+unittest/+ontology/ontology_lookup_tests.j
 
 # MATLAB's TestOntologyLookup pauses 1s between cases to stay friendly to OLS,
 # NCBI and PubChem. Same courtesy here; without it 47 live lookups arrive as a
-# burst and the far end starts answering with rate-limit errors, which the
-# providers swallow into empty results and this suite reports as mismatches.
+# burst and the far end starts answering with rate-limit errors, which this
+# suite would report as mismatches.
 INTER_CASE_DELAY_S = 1.0
 
 
@@ -142,10 +142,12 @@ def _as_param(case: dict):
     return pytest.param(case, marks=marks)
 
 
-# Backoff for a success case that comes back empty. The providers answer a
-# transport failure -- a timeout, or a 429 from an API that is throttling a
-# 46-case burst -- with the same empty OntologyResult they use for "term not
-# found", so the suite cannot tell the two apart from the value alone.
+# Backoff for a success case that fails. A transport failure -- a timeout, or
+# a 429 from an API that is throttling a burst -- raises the same
+# NDIOntologyLookupError as "term not found" does. (Until #11 the providers
+# swallowed it into an empty result outright; now it is chained as the
+# cause, but this suite still cannot tell a transient failure from a real
+# one in a single attempt.)
 # Untreated, that reports throttling as a parity mismatch: CL:cell and
 # OM:Acidity failed one CI run after passing the two before it, on a change
 # that touched only the numeric-id branch, in a run that took twice as long
