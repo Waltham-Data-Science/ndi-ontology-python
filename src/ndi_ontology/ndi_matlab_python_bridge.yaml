@@ -603,33 +603,58 @@ providers:
     status: ported
     matlab_last_sync_hash: "8e109b0"
     sync_status: >
-      NOT EXAMINED against EMPTY.m at 8e109b0 -- the fix below was verified
-      against the live ontology, not against the MATLAB source, so this
-      entry stays unexamined.
-      The provider fetched its JSON from
-      raw.githubusercontent.com/Waltham-ndi_gui_Data-Science/..., which
-      404s. The org is Waltham-Data-Science; 'ndi_gui_Data' is the residue
-      of a global find/replace of the identifier `Data` (NDI-python has a
-      real ndi_gui_Data class in gui/data.py) that rewrote the word
-      wherever it appeared, URLs included. _load_ontology caught the 404,
-      cached an empty index and returned it, so every EMPTY lookup returned
-      an empty result and the table's three EMPTY failure cases passed
-      vacuously. FIXED 2026-09-02; verified live, all six EMPTY cases now
-      behave correctly.
-      NDI-python carries the same corruption in three provenance URLs
-      (__init__.py:97, app/__init__.py:113 and 116), where it is written
-      into ndi_document provenance whenever git is unavailable. Reported,
-      not fixed here -- different repository.
-      CACHING (2026-10-21): a failed download used to be cached as an empty
-      index -- the mechanism that hid the 404 above -- so one timeout made
-      every EMPTY lookup a "not found" until the process restarted, which
-      clearCache() could not undo. It now raises and caches nothing, and
-      clearCache() resets the cache. Keeping a per-process cache at all is a
-      deliberate difference: EMPTY.m caches nothing and downloads on every
-      lookup. Also still unexamined: Python reads empty-base.json where
-      MATLAB reads the .owl files, and has no fallback to the development
-      branch.
-      never checked against this MATLAB class.
+      EXAMINED against EMPTY.m at 8e109b0 (2026-10-21) and rewritten to
+      follow it. Methods keep MATLAB's names: lookupTermOrID,
+      performRemoteLookup, parseXMLFormat, parseFunctionalFormat and
+      unescapeXML, with the constants ONTOLOGY_PREFIX, OWL_URL_MAIN and
+      OWL_URL_DEV. lookup_term wraps lookupTermOrID for the dispatcher.
+      Verified, each by an offline test with the downloads mocked:
+      (1) reads main/empty-base.owl, not empty-base.json as before;
+      (2) format detection -- '<?xml' or '<rdf:RDF' selects the RDF/XML
+      parser, anything else the functional-syntax parser, so either file
+      may be in either format;
+      (3) matching -- the bare numeric id or the whole label,
+      case-insensitive, exactly as written, first match wins (XML in
+      document order, functional in sorted-id order, as MATLAB's unique()
+      sorts). The previous Python also zero-padded numeric ids, accepted
+      'EMPTY_0000074' and fell back to a label-substring match; EMPTY.m does
+      none of these, so all three are gone, which means 'EMPTY:2' and
+      partial names now fail where they used to resolve;
+      (4) returns 'EMPTY:<digits>', the label, the first IAO_0000115
+      definition and every hasExactSynonym/hasRelatedSynonym, with XML
+      values passed through unescapeXML in MATLAB's order (&amp; before
+      &lt;/&gt;, leftover tags stripped, trimmed) and functional values
+      raw;
+      (5) failover -- any failure on main (not-found or transport) tries
+      development/src/ontology/empty-edit.owl; a 404 there re-raises main's
+      error; any other failure there raises LookupFailed carrying both
+      (EMPTY.m:46-51). TermNotFound from the provider becomes an empty
+      result, which lookup() turns into NDIOntologyLookupError; every other
+      error propagates and is chained by lookup().
+      The six EMPTY cases in the shared table pass live against GitHub raw.
+      The development branch currently 404s, so live lookups exercise only
+      the main path; the fallback is covered by the mocked tests alone.
+      DIFFERENCES, deliberate: (a) EMPTY.m:39 detects the missing branch by
+      sniffing the error message for '404' or 'Not Found'; Python checks the
+      HTTP status code, so a term containing '404' is not mistaken for a
+      missing branch. Only which error is raised can differ; both raise.
+      (b) CACHING: EMPTY.m caches nothing and downloads on every lookup.
+      Python caches each file's body by URL for the life of the process.
+      Kept because a failure can no longer be what it holds: a failed
+      download raises and caches nothing (the old empty-index cache once
+      hid a 404'ing URL behind three vacuously passing not-found cases),
+      and clearCache() resets EMPTYProvider._cache. A development-branch
+      404 is a failure too, so it is not cached and is re-requested by each
+      lookup that misses on main, as in MATLAB.
+      Not ported: the unused searchPattern in parseFunctionalFormat
+      (EMPTY.m:79), which is built and never read; and the
+      'mainError is empty' branch (EMPTY.m:42), which cannot be reached.
+      HISTORY: until 2026-09-02 the JSON URL read
+      Waltham-ndi_gui_Data-Science/..., the residue of a global rename of
+      the identifier `Data` in NDI-python, and 404'd; the empty-index cache
+      hid it. NDI-python carries the same corruption in three provenance
+      URLs (__init__.py:97, app/__init__.py:113 and 116) -- reported there,
+      different repository.
 
   # --- Not ported: MATLAB class exists, Python provider does not ---------
   # Tracked by NDI-python#98. Adding one means: the provider class here, the
