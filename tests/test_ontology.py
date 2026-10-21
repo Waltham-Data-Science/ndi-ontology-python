@@ -204,6 +204,60 @@ class TestLookup:
         assert "CL:0000540" not in _lookup_cache
 
 
+class TestLookupSetsMatlabFields:
+    """lookup() sets prefix, synonyms and shortName itself, as MATLAB's does.
+
+    MATLAB: ontology.m:295 (prefix), :316-327 (synonyms), :332 (shortName).
+    """
+
+    def setup_method(self):
+        from ndi_ontology import clearCache
+
+        clearCache()
+
+    teardown_method = setup_method
+
+    def test_short_name_is_name2variableName_not_ols_short_form(self):
+        """The case that gave NDI-python different table columns from MATLAB."""
+        from ndi_ontology import OntologyResult, lookup
+
+        provided = OntologyResult(
+            id="CHEBI:15377", name="water", prefix="CHEBI", short_name="CHEBI_15377"
+        )
+        with patch("ndi_ontology.providers.OLSProvider.lookup_term", return_value=provided):
+            result = lookup("CHEBI:15377")
+        assert result.short_name == "Water"
+
+    def test_short_name_is_set_where_the_provider_left_it_blank(self):
+        from ndi_ontology import lookup
+
+        assert lookup("NDIC:8").short_name == "ExperiencedCricketHunting"
+
+    @pytest.mark.parametrize("typed", ["NDIC", "ndic", "Ndic"])
+    def test_prefix_is_the_prefix_as_typed(self, typed):
+        """MATLAB returns the caller's prefix, not the ontology's canonical one."""
+        from ndi_ontology import lookup
+
+        assert lookup(f"{typed}:8").prefix == typed
+
+    def test_alias_prefix_is_kept(self):
+        from ndi_ontology import OntologyResult, lookup
+
+        provided = OntologyResult(id="9606", name="Homo sapiens", prefix="NCBITaxon")
+        with patch("ndi_ontology.providers.NCBITaxonProvider.lookup_term", return_value=provided):
+            assert lookup("taxonomy:9606").prefix == "taxonomy"
+
+    def test_synonyms_are_flattened_and_empties_dropped(self):
+        from ndi_ontology import OntologyResult, lookup
+
+        provided = OntologyResult(
+            id="CL:0000540", name="neuron", synonyms=["nerve cell", "", ["neurone", ""]]
+        )
+        with patch("ndi_ontology.providers.OLSProvider.lookup_term", return_value=provided):
+            result = lookup("CL:0000540")
+        assert result.synonyms == ["nerve cell", "neurone"]
+
+
 # ---------------------------------------------------------------------------
 # Provider registry
 # ---------------------------------------------------------------------------

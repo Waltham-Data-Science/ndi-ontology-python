@@ -26,6 +26,7 @@ from typing import Any
 
 import pydantic
 
+from .name_utils import name2variableName
 from .providers import PROVIDER_REGISTRY
 
 # ---------------------------------------------------------------------------
@@ -263,6 +264,24 @@ def lookup(lookup_string: str) -> OntologyResult:
 
     if not result:
         raise NDIOntologyLookupError(f"{lookup_string!r} not found in ontology {provider_name}")
+
+    # MATLAB sets these three in lookup() itself, after the provider returns,
+    # so every ontology answers alike; providers used to set them, and
+    # disagreed. prefix is the prefix as typed, trimmed (ontology.m:295), so
+    # 'ndic:8' gives 'ndic' and 'taxonomy:9606' gives 'taxonomy'. synonyms
+    # are flattened with empty entries dropped (ontology.m:316-327).
+    # shortName is name2variableName(name) for every ontology (ontology.m:332);
+    # NDI's subject tables name treatment columns with it, so a provider
+    # returning OLS's short_form or '' gave Python different columns from
+    # MATLAB for the same dataset.
+    result.prefix = prefix.strip()
+    result.synonyms = [
+        s
+        for item in result.synonyms
+        for s in (item if isinstance(item, (list, tuple)) else [item])
+        if s
+    ]
+    result.short_name = name2variableName(result.name)
 
     # Only resolved terms reach here now, so the cache cannot hold a failure --
     # the same guarantee MATLAB gets from raising before its cache write at

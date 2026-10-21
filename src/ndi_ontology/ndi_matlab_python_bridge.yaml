@@ -168,6 +168,17 @@ classes:
           Python uses a prefix-based dispatcher routing to provider classes;
           MATLAB uses static methods on the ontology class. Both accept the
           same 'prefix:id' input format. Uses @pydantic.validate_call.
+          FIXED 2026-10-21 (#11): lookup() now sets prefix, synonyms and
+          shortName itself after the provider returns, as MATLAB's does --
+          prefix as typed and trimmed (ontology.m:295), synonyms flattened
+          with empties dropped (:316-327), shortName = name2variableName(name)
+          (:332). They were left to each provider, and the providers
+          disagreed: the OLS-backed ones returned OLS's short_form
+          ('CL_0000540') as shortName, nine others returned '', and several
+          returned a canonical prefix ('NDIC' for 'ndic:8', 'NCBITaxon' for
+          'taxonomy:9606'). NDI-python names treatment columns in its subject
+          tables from shortName, so the same dataset got different columns
+          in each language. The shared-case runner now asserts both fields.
 
       # --- Instance: lookupTermOrID ---
       - name: lookupTermOrID
