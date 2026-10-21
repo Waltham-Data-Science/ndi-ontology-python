@@ -832,15 +832,22 @@ class EMPTYProvider(OntologyProvider):
     _cache: dict[str, Any] | None = None
 
     def _load_ontology(self) -> dict[str, Any]:
-        """Fetch and parse empty-base.json, caching in class variable."""
+        """Fetch and parse empty-base.json, caching in class variable.
+
+        A failed download raises and caches nothing, so the next lookup tries
+        again; lookup() turns the raise into NDIOntologyLookupError with the
+        cause chained. This used to cache an empty index instead, which made
+        one timeout or 429 a permanent "not found" for every EMPTY term for
+        the life of the process, beyond the reach of clearCache() -- and it
+        is how a 404'ing URL once hid behind three vacuously passing
+        not-found cases. MATLAB's EMPTY.m caches nothing and downloads on
+        every lookup; the cache here is a deliberate difference, kept because
+        a failure can no longer be what it holds. clearCache() resets it.
+        """
         if EMPTYProvider._cache is not None:
             return EMPTYProvider._cache
 
-        try:
-            data = self._http_get_json(self._JSON_URL, timeout=30)
-        except Exception:
-            EMPTYProvider._cache = {"nodes": [], "edges": []}
-            return EMPTYProvider._cache
+        data = self._http_get_json(self._JSON_URL, timeout=30)
 
         # The JSON has a single graph with nodes and edges
         graphs = data.get("graphs", [])

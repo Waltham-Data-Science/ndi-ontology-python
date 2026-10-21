@@ -201,10 +201,14 @@ classes:
           DISCREPANCY FIXED: Python ad-hoc port used 'clear_cache'
           (snake_case). Renamed to 'clearCache' to match MATLAB.
           Synchronized 2026-03-13. Since 44efcec it also clears OM's file
-          index, as MATLAB's does. KNOWN GAP, pre-existing and not touched
-          here: MATLAB's clearCache also clears its OBO file cache
-          (lookupOBOFile), whose Python counterpart is EMPTYProvider._cache,
-          and Python's clearCache() does not reset it.
+          index, as MATLAB's does.
+          It also resets EMPTYProvider._cache, which has no MATLAB
+          counterpart: EMPTY.m downloads its OWL file on every lookup and
+          caches nothing. MATLAB's clearCache does clear lookupOBOFile's
+          cache, but nothing in ndi-ontology-matlab calls lookupOBOFile, so
+          that cache is always empty and there is nothing to mirror. An
+          earlier note here (2026-10-20) wrongly paired the two. Corrected
+          2026-10-21.
 
       # --- Static: getOntologyNameFromPrefix ---
       - name: getOntologyNameFromPrefix
@@ -297,10 +301,12 @@ classes:
           - name: result
             type_python: "OntologyResult"
         decision_log: >
-          MATLAB parses local .obo files for offline lookup. Python
-          EMPTYProvider fetches the ontology as JSON from GitHub.
-          Behavioral parity via different mechanisms.
-          Documented for completeness.
+          NOT PORTED, and nothing needs it. MATLAB's lookupOBOFile parses a
+          local .obo file, but nothing in ndi-ontology-matlab calls it --
+          EMPTY.m in particular reads OWL files from GitHub, not .obo -- so
+          it has no behaviour to mirror. An earlier note here called
+          EMPTYProvider its Python counterpart; that was wrong (corrected
+          2026-10-21). Documented for completeness.
 
 # =========================================================================
 # Provider classes
@@ -603,6 +609,15 @@ providers:
       (__init__.py:97, app/__init__.py:113 and 116), where it is written
       into ndi_document provenance whenever git is unavailable. Reported,
       not fixed here -- different repository.
+      CACHING (2026-10-21): a failed download used to be cached as an empty
+      index -- the mechanism that hid the 404 above -- so one timeout made
+      every EMPTY lookup a "not found" until the process restarted, which
+      clearCache() could not undo. It now raises and caches nothing, and
+      clearCache() resets the cache. Keeping a per-process cache at all is a
+      deliberate difference: EMPTY.m caches nothing and downloads on every
+      lookup. Also still unexamined: Python reads empty-base.json where
+      MATLAB reads the .owl files, and has no fallback to the development
+      branch.
       never checked against this MATLAB class.
 
   # --- Not ported: MATLAB class exists, Python provider does not ---------
