@@ -14,10 +14,11 @@ project_metadata:
     are relative to ndi-ontology-matlab unless the entry says otherwise.
     Examined against ndi-ontology-matlab at 984abef (2026-09-02); re-examined
     at 9d8fc03 (2026-10-14) for its PR #9 (WormBase, NCBITaxon synonyms,
-    string input).
+    string input); re-examined at 1fbd38b (2026-10-20) for its PR #10 (OM
+    units from OM's own file; MICRO, MCO, OBI, ZECO, WBls, OWLTime, CREDIT).
 
-  matlab_examined_hash: "9d8fc03"
-  matlab_examined_date: "2026-10-14"
+  matlab_examined_hash: "1fbd38b"
+  matlab_examined_date: "2026-10-20"
   examination_note: >
     Per the porting guide's section 3, each entry records
     matlab_last_sync_hash: the short hash of the MATLAB file the Python side
@@ -65,10 +66,13 @@ classes:
     python_path: "ndi_ontology/__init__.py"
     python_class: "module-level functions + OntologyResult"
     inherits: ""
-    matlab_last_sync_hash: "9d9b4e1"
+    matlab_last_sync_hash: "44efcec"
     sync_status: >
+      Re-examined at 44efcec (2026-10-20): the one change is clearCache, which
+      now also forgets OM's file index (ndi.ontology.OM.fileIndex(true));
+      Python's clearCache() calls OMProvider.fileIndex(True) to match.
       Interface examined against ontology.m at 9d9b4e1 (2026-09-02), and now
-      behaviourally synced as well: all 19 ontology classes are ported, the
+      behaviourally synced as well: all 26 ontology classes are ported, the
       prefix map is single-sourced from ontology_list.json, and lookup()
       raises NDIOntologyLookupError where MATLAB raises, rather than returning
       an empty OntologyResult. NDI-python#98 is closed.
@@ -196,7 +200,11 @@ classes:
         decision_log: >
           DISCREPANCY FIXED: Python ad-hoc port used 'clear_cache'
           (snake_case). Renamed to 'clearCache' to match MATLAB.
-          Synchronized 2026-03-13.
+          Synchronized 2026-03-13. Since 44efcec it also clears OM's file
+          index, as MATLAB's does. KNOWN GAP, pre-existing and not touched
+          here: MATLAB's clearCache also clears its OBO file cache
+          (lookupOBOFile), whose Python counterpart is EMPTYProvider._cache,
+          and Python's clearCache() does not reset it.
 
       # --- Static: getOntologyNameFromPrefix ---
       - name: getOntologyNameFromPrefix
@@ -395,11 +403,58 @@ providers:
     python_class: "OMProvider"
     inherits: "OLSProvider"
     status: ported
-    matlab_last_sync_hash: "8e109b0"
+    matlab_examined: partial
+    matlab_last_sync_hash: "ddbd1d0"
     sync_status: >
-      NOT EXAMINED against OM.m at 8e109b0. Python implementation predates
-      the extraction and mirrors NDI-python's pre-split behaviour, which was
-      never checked against this MATLAB class.
+      STEP 0 EXAMINED and PORTED against OM.m at ddbd1d0 (2026-10-20); the OLS
+      fallback (OM's branch of preprocessLookupInput) is still the pre-split
+      Python and not re-examined.
+      OM's units are individuals (om:metre is an om:Unit), which OLS does not
+      index, so OM.m (since 44efcec) reads OM's own RDF file first:
+      fileIndex downloads RDF_URL once per session, parseRDF indexes every
+      top-level `  <tag rdf:about="&om;local">` block (merging blocks that
+      share an identifier; English label, comment, alternative labels), and
+      findInIndex tries five rules in order -- identifier exact, identifier
+      ignoring case, label, alternative label, camel-case heuristic against
+      labels -- taking the first that names exactly one entry. Numeric terms
+      skip the file. An unreadable file warns
+      (ndi:ontology:OM:FileUnavailable; Python warnings.warn) and falls back
+      to OLS. All three static methods are ported under MATLAB's names on
+      OMProvider; findInIndex returns a 0-based index or None where MATLAB
+      returns a 1-based index or []. The regex is MATLAB's, with re.M|re.S
+      for MATLAB's lineanchors and its newline-matching '.'.
+      Verified 2026-10-20 against the live om-2.0.rdf: all 18 of the table's
+      OM cases match, including the 10 that 44efcec added.
+    methods:
+      - name: fileIndex
+        kind: static
+        python_name: "OMProvider.fileIndex"
+        input_arguments:
+          - name: reset
+            type_python: "bool = False"
+        output_arguments:
+          - name: idx
+            type_python: "dict[str, list] | None"
+      - name: parseRDF
+        kind: static
+        python_name: "OMProvider.parseRDF"
+        input_arguments:
+          - name: txt
+            type_python: "str"
+        output_arguments:
+          - name: idx
+            type_python: "dict[str, list] (local, label, definition, alternative, kind)"
+      - name: findInIndex
+        kind: static
+        python_name: "OMProvider.findInIndex"
+        input_arguments:
+          - name: idx
+            type_python: "dict[str, list]"
+          - name: term
+            type_python: "str"
+        output_arguments:
+          - name: k
+            type_python: "int | None (0-based; MATLAB 1-based or [])"
 
   - name: NDIC
     matlab_path: "src/ndi/+ndi/+ontology/NDIC.m"
@@ -658,6 +713,144 @@ providers:
       this). The id is the term as given, not canonicalised, and name falls
       back to the term when the document carries no rdfs:label.
 
+  - name: MICRO
+    matlab_path: "src/ndi/+ndi/+ontology/MICRO.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "MICROProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_examined: true
+    matlab_last_sync_hash: "ddbd1d0"
+    sync_status: >
+      EXAMINED and PORTED against MICRO.m at ddbd1d0 (2026-10-20). MicrO, prokaryotic phenotypes and culture media.
+      OLS-backed, ontology 'micro', prefix 'MICRO'; MATLAB sets only those
+      two parameters and defers to the shared helpers, so the Python subclass
+      does too. Not run live from the porting sandbox (EBI unreachable there);
+      the shared case table checks it in CI.
+
+  - name: MCO
+    matlab_path: "src/ndi/+ndi/+ontology/MCO.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "MCOProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_examined: true
+    matlab_last_sync_hash: "ddbd1d0"
+    sync_status: >
+      EXAMINED and PORTED against MCO.m at ddbd1d0 (2026-10-20). Microbial Conditions Ontology.
+      OLS-backed, ontology 'mco', prefix 'MCO'; MATLAB sets only those
+      two parameters and defers to the shared helpers, so the Python subclass
+      does too. Not run live from the porting sandbox (EBI unreachable there);
+      the shared case table checks it in CI.
+
+  - name: OBI
+    matlab_path: "src/ndi/+ndi/+ontology/OBI.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "OBIProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_examined: true
+    matlab_last_sync_hash: "ddbd1d0"
+    sync_status: >
+      EXAMINED and PORTED against OBI.m at ddbd1d0 (2026-10-20). Ontology for Biomedical Investigations.
+      OLS-backed, ontology 'obi', prefix 'OBI'; MATLAB sets only those
+      two parameters and defers to the shared helpers, so the Python subclass
+      does too. Not run live from the porting sandbox (EBI unreachable there);
+      the shared case table checks it in CI.
+
+  - name: ZECO
+    matlab_path: "src/ndi/+ndi/+ontology/ZECO.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "ZECOProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_examined: true
+    matlab_last_sync_hash: "889ddbe"
+    sync_status: >
+      EXAMINED and PORTED against ZECO.m at 889ddbe (2026-10-20). Zebrafish Experimental Conditions Ontology.
+      OLS-backed, ontology 'zeco', prefix 'ZECO'; MATLAB sets only those
+      two parameters and defers to the shared helpers, so the Python subclass
+      does too. Not run live from the porting sandbox (EBI unreachable there);
+      the shared case table checks it in CI.
+
+  - name: WBls
+    matlab_path: "src/ndi/+ndi/+ontology/WBls.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "WBlsProvider"
+    inherits: "OLSProvider"
+    status: ported
+    matlab_examined: true
+    matlab_last_sync_hash: "2349314"
+    sync_status: >
+      EXAMINED and PORTED against WBls.m at 2349314 (2026-10-20). C. elegans Development Ontology (life stages).
+      OLS-backed, ontology 'wbls', prefix 'WBls'; MATLAB sets only those
+      two parameters and defers to the shared helpers, so the Python subclass
+      does too. Not run live from the porting sandbox (EBI unreachable there);
+      the shared case table checks it in CI.
+
+  - name: OWLTime
+    matlab_path: "src/ndi/+ndi/+ontology/OWLTime.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "OWLTimeProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_examined: true
+    matlab_last_sync_hash: "82fb0fe"
+    sync_status: >
+      EXAMINED and PORTED against OWLTime.m at 82fb0fe (2026-10-20). Prefix
+      'time'. OWL-Time's 15 interval relations are a fixed list held in the
+      class (RELATIONS), copied verbatim from MATLAB -- checked equal row for
+      row by script. find ignores case, whitespace and underscores; the id is
+      time:<localName>, the synonym the term's IRI; a miss raises. All five of
+      the table's OWLTime cases match, offline.
+    methods:
+      - name: find
+        kind: static
+        python_name: "OWLTimeProvider.find"
+        input_arguments:
+          - name: term
+            type_python: "str"
+        output_arguments:
+          - name: k
+            type_python: "int | None (1-based row of RELATIONS, as MATLAB)"
+
+  - name: CREDIT
+    matlab_path: "src/ndi/+ndi/+ontology/CREDIT.m"
+    python_path: "ndi_ontology/providers.py"
+    python_class: "CREDITProvider"
+    inherits: "OntologyProvider"
+    status: ported
+    matlab_examined: true
+    matlab_last_sync_hash: "ddbd1d0"
+    sync_status: >
+      EXAMINED and PORTED against CREDIT.m at ddbd1d0 (2026-10-20). Prefix
+      'CREDIT' (any case; Bioregistry writes credit:). The 14 CRediT roles are
+      held in the class (ROLES), copied verbatim from MATLAB -- en dashes
+      included, checked equal row for row by script. find accepts CRO's
+      number (CREDIT_/CREDIT: optional, 1..14, else no match) or a slug/name
+      compared through normalise; the id is credit:<slug>, the synonym
+      CREDIT:%08d; a miss raises. All seven of the table's CREDIT cases match,
+      offline.
+    methods:
+      - name: find
+        kind: static
+        python_name: "CREDITProvider.find"
+        input_arguments:
+          - name: term
+            type_python: "str"
+        output_arguments:
+          - name: k
+            type_python: "int | None (1-based row of ROLES, as MATLAB)"
+      - name: normalise
+        kind: static
+        python_name: "CREDITProvider.normalise"
+        input_arguments:
+          - name: s
+            type_python: "str"
+        output_arguments:
+          - name: s
+            type_python: "str"
+
 
 # =========================================================================
 # Data files
@@ -667,8 +860,12 @@ data_files:
   - name: ontology_list.json
     matlab_path: "src/ndi/ndi_common/ontology/ontology_list.json"
     python_path: "ndi_ontology/ndi_common/ontology/ontology_list.json"
-    matlab_last_sync_hash: "ff3c3fd"
+    matlab_last_sync_hash: "2349314"
     sync_status: >
+      IN SYNC as of 2026-10-20: byte-identical copy of ndi-ontology-matlab at
+      2349314 -- 30 prefixes; adds MICRO, MCO, OBI, ZECO, WBls, time
+      (OWLTime) and CREDIT, the last two with api_url null.
+      Earlier history:
       IN SYNC as of 2026-10-14: byte-identical copy of ndi-ontology-matlab at
       ff3c3fd -- 23 prefixes, WBStrain and the new wormbase both mapped to
       WormBase, whose api_url is now WormMine.
@@ -747,9 +944,16 @@ tests:
       PORTED 1:1 at 0c18bf8 (2026-10-14), as TestLookupSynonymsLive, under the
       `live` marker (NCBI and WormMine).
 
+  - matlab_path: "tests/+ndi/+unittest/+ontology/TestOMFile.m"
+    python_path: "tests/matlab_tests/test_ontology_parsing.py"
+    matlab_last_sync_hash: "44efcec"
+    sync_status: >
+      PORTED 1:1 at 44efcec (2026-10-20), as TestOMFile. Offline. findInIndex
+      returns None where MATLAB's is empty.
+
   - matlab_path: "tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json"
     python_path: "tests/test_shared_cases.py"
-    matlab_last_sync_hash: "ff3c3fd"
+    matlab_last_sync_hash: "2349314"
     role: symmetry
     sync_status: >
       CONSUMED DIRECTLY, not vendored. This is the parity check for the
@@ -766,6 +970,10 @@ tests:
       ff3c3fd (2026-10-14) added seven WormBase cases (by id, by name, the
       wormbase: CURIE, and four that must fail), so WormBase left
       test_case_table_covers_every_ported_provider's known gaps.
+      By 2349314 (2026-10-20) the table holds 114 cases across 23 ontologies:
+      ten OM unit cases (44efcec) and cases for MICRO, MCO, OBI, ZECO, WBls,
+      OWLTime and CREDIT, all with providers here. CREDIT and OWLTime join
+      NDIC as offline cases, run without the network gate.
 
 # =========================================================================
 # Caching

@@ -1,7 +1,7 @@
 """Run ndi-ontology-matlab's own test-case table against the Python port.
 
 `ndi-ontology-matlab` drives `TestOntologyLookup.m` from
-`tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json`: 66 cases across 15
+`tests/+ndi/+unittest/+ontology/ontology_lookup_tests.json`: 114 cases across 23
 ontologies, each naming a lookup string and the exact `expected_id` and
 `expected_name` it must produce. That file is language-neutral, so this module
 reads the *same* file and asserts the same things about `ndi_ontology.lookup`.
@@ -39,7 +39,12 @@ from pathlib import Path
 import pytest
 
 from ndi_ontology import lookup
-from ndi_ontology.providers import PROVIDER_REGISTRY, NDICProvider
+from ndi_ontology.providers import (
+    PROVIDER_REGISTRY,
+    CREDITProvider,
+    NDICProvider,
+    OWLTimeProvider,
+)
 from tests._live import (
     REQUIRE_LIVE,
     network_available,
@@ -172,6 +177,10 @@ def _lookup_expecting_success(lookup_string: str):
     raise AssertionError(f"{lookup_string!r} never resolved: {last}")
 
 
+#: Providers that answer from data shipped in this package, never the network.
+OFFLINE_PROVIDERS = (NDICProvider, CREDITProvider, OWLTimeProvider)
+
+
 def _case_id(case: dict) -> str:
     outcome = "ok" if case.get("should_succeed") else "fail"
     return f"{case.get('ontology', '?')}-{outcome}-{case.get('lookup_string', '?')}"
@@ -191,15 +200,16 @@ def test_matlab_case_table(case: dict) -> None:
             f"(Waltham-Data-Science/NDI-python#98)"
         )
 
-    # NDIC reads NDIC.txt from inside this package, so its cases are the ones
-    # that hold with no network at all -- and, since that file is this
-    # repository's to ship, the ones most worth checking here. Gate only the
-    # cases that actually call out.
+    # NDIC reads NDIC.txt from inside this package, and CREDIT and OWLTime hold
+    # their fixed lists in the provider, so their cases are the ones that hold
+    # with no network at all -- and, since that data is this repository's to
+    # ship, the ones most worth checking here. Gate only the cases that
+    # actually call out.
     # A case with no prefix at all (the table has one: "275") never reaches a
     # provider -- it is testing that an unprefixed string is rejected -- so it
     # needs neither a provider nor the network. Skipping it as "not ported"
     # would have been a lie about why it did not run.
-    if provider is not None and provider is not NDICProvider:
+    if provider is not None and provider not in OFFLINE_PROVIDERS:
         if not network_available():
             pytest.skip("no network access; this case queries a live ontology API")
         time.sleep(INTER_CASE_DELAY_S)
@@ -249,6 +259,8 @@ def test_case_table_covers_every_ported_provider() -> None:
     # noticed; that is what it is for.
     #
     # WormBase left it when ndi-ontology-matlab added its strain cases (9d8fc03).
+    # MICRO, MCO, OBI, ZECO, WBls, OWLTime and CREDIT arrived with their cases
+    # (ndi-ontology-matlab 1e48638..2349314), so they never joined it.
     known_gaps = {"SNOMED", "EFO", "NCIT"}
     unexpected = set(uncovered) - known_gaps
     assert not unexpected, (
