@@ -170,6 +170,24 @@ class TestLookup:
             lookup("cl:1")  # lowercase
             assert mock_lt.called
 
+    def test_remainder_is_trimmed_before_the_provider_sees_it(self):
+        """ontology.m:493 -- remainder = strtrim(...) before lookupTermOrID."""
+        from ndi_ontology import OntologyResult, lookup
+
+        with patch("ndi_ontology.providers.OLSProvider.lookup_term") as mock_lt:
+            mock_lt.return_value = OntologyResult(id="CL:0000540", name="neuron")
+            lookup("CL:  0000540 \t")
+        mock_lt.assert_called_once_with("0000540", "CL")
+
+    @pytest.mark.parametrize("typed", ["NDIC: 8", " NDIC:8", "NDIC :8", "  ndic : 8  "])
+    def test_whitespace_around_prefix_or_term_resolves(self, typed):
+        """ontology.m:493 trims both halves; the prefix before it is mapped."""
+        from ndi_ontology import lookup
+
+        result = lookup(typed)
+        assert result.name == "Experienced cricket hunting"
+        assert result.prefix == typed.split(":", 1)[0].strip()
+
     def test_provider_exception_is_chained(self):
         """A provider error surfaces as NDIOntologyLookupError, cause intact.
 
