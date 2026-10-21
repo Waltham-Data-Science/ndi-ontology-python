@@ -968,6 +968,28 @@ class NCITProvider(OLSProvider):
     ols_ontology = "ncit"
     ols_prefix = "NCIT"
 
+    @pydantic.validate_call
+    def lookup_term(self, term: str, prefix: str = "") -> Any:
+        from . import OntologyResult
+
+        prefix = prefix or self.ols_prefix
+
+        # NCIT.m runs preprocessLookupInput and then, whatever search field it
+        # chose, always searches obo_id for ['NCIT:', search_query]. NCIT codes
+        # (C3262) are not numeric, so the inherited lookup_term sent them to a
+        # label search, which never matches a code; and it resolved names,
+        # which MATLAB does not.
+        query = term.strip()
+        if query.upper().startswith("NCIT:"):
+            query = query[len("NCIT:") :].strip()
+            if not query:
+                return OntologyResult()
+        # preprocessLookupInput turns a numeric id into 'NCIT:<digits>', which
+        # NCIT.m then prefixes again; kept, so this matches what MATLAB sends.
+        if re.match(r"^\d+$", query):
+            query = f"NCIT:{query}"
+        return self._search_ols(f"NCIT:{query}", "obo_id", prefix)
+
 
 class STATOProvider(OLSProvider):
     """Statistics Ontology.
