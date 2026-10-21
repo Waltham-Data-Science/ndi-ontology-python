@@ -701,9 +701,9 @@ providers:
       ['NCIT:', search_query], so NCITProvider now overrides lookup_term to
       do the same. The inherited lookup sent codes such as C3262 (not
       numeric) to a label search that never matched, and resolved names,
-      which MATLAB does not. NOTE: MATLAB's shared case table has no NCIT
-      cases until ndi-ontology-matlab#13 merges; NCIT stays in
-      test_shared_cases.py's known_gaps until then.
+      which MATLAB does not. MATLAB's shared case table covers NCIT since
+      ndi-ontology-matlab 36d7814, so it has left test_shared_cases.py's
+      known_gaps.
 
 
   - name: EDAM
