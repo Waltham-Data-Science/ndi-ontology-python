@@ -219,6 +219,24 @@ class TestLookup:
             lookup("cl:1")  # lowercase
             assert mock_lt.called
 
+    def test_remainder_is_trimmed_before_the_provider_sees_it(self):
+        """ontology.m:493 -- remainder = strtrim(...) before lookupTermOrID."""
+        from ndi_ontology import OntologyResult, lookup
+
+        with patch("ndi_ontology.providers.OLSProvider.lookup_term") as mock_lt:
+            mock_lt.return_value = OntologyResult(id="CL:0000540", name="neuron")
+            lookup("CL:  0000540 \t")
+        mock_lt.assert_called_once_with("0000540", "CL")
+
+    @pytest.mark.parametrize("typed", ["NDIC: 8", " NDIC:8", "NDIC :8", "  ndic : 8  "])
+    def test_whitespace_around_prefix_or_term_resolves(self, typed):
+        """ontology.m:493 trims both halves; the prefix before it is mapped."""
+        from ndi_ontology import lookup
+
+        result = lookup(typed)
+        assert result.name == "Experienced cricket hunting"
+        assert result.prefix == typed.split(":", 1)[0].strip()
+
     def test_provider_exception_is_chained(self):
         """A provider error surfaces as NDIOntologyLookupError, cause intact.
 
@@ -497,6 +515,47 @@ class TestOLSProvider:
         with patch.object(provider, "_http_get_json", side_effect=fake):
             provider.lookup_term("15377", "CHEBI")
         assert fake.search_params["q"] == "CHEBI:15377"
+
+    def test_ncit_code_is_an_exact_obo_id_search(self):
+        """NCIT.m searches obo_id for ['NCIT:', code]; C3262 is not numeric."""
+        from ndi_ontology.providers import NCITProvider
+
+        provider = NCITProvider()
+        fake = FakeOLS(
+            [ols_doc("NCIT", "C3262", "Neoplasm")], [ols_record("NCIT", "C3262", "Neoplasm")]
+        )
+        with patch.object(provider, "_http_get_json", side_effect=fake):
+            result = provider.lookup_term("C3262", "NCIT")
+        assert fake.search_params == {
+            "q": "NCIT:C3262",
+            "ontology": "ncit",
+            "queryFields": "obo_id",
+            "exact": "true",
+        }
+        assert result.id == "NCIT:C3262"
+        assert result.name == "Neoplasm"
+
+    def test_ncit_name_is_not_a_label_search(self):
+        """NCIT.m sends a name to the obo_id search too, so it finds nothing."""
+        from ndi_ontology.providers import NCITProvider
+
+        provider = NCITProvider()
+        fake = FakeOLS([])
+        with patch.object(provider, "_http_get_json", side_effect=fake):
+            assert not provider.lookup_term("Neoplasm", "NCIT")
+        assert fake.search_params["q"] == "NCIT:Neoplasm"
+        assert fake.search_params["queryFields"] == "obo_id"
+
+    def test_ncit_prefixed_and_numeric_terms(self):
+        """A repeated prefix is unwrapped; digits are prefixed twice, as MATLAB sends them."""
+        from ndi_ontology.providers import NCITProvider
+
+        provider = NCITProvider()
+        for term, expected in (("NCIT:C3262", "NCIT:C3262"), ("123", "NCIT:NCIT:123")):
+            fake = FakeOLS([])
+            with patch.object(provider, "_http_get_json", side_effect=fake):
+                provider.lookup_term(term, "NCIT")
+            assert fake.search_params["q"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -1127,21 +1186,45 @@ class TestWormBaseProvider:
 
 
 class TestEMPTYProvider:
-    """Tests for EMPTY provider, with the download mocked."""
+    """Tests for EMPTY provider, against EMPTY.m, with the downloads mocked."""
 
-    GRAPH = {
-        "graphs": [
-            {
-                "nodes": [
-                    {
-                        "id": "http://purl.obolibrary.org/obo/EMPTY_0000074",
-                        "lbl": "Optogenetic Tetanus Stimulation Target Location",
-                        "meta": {"definition": {"val": "Where the light goes."}},
-                    }
-                ]
-            }
-        ]
-    }
+    # An excerpt of empty-base.owl in RDF/XML, as the main branch serves it.
+    XML = """<?xml version="1.0"?>
+<rdf:RDF xmlns:obo="http://purl.obolibrary.org/obo/"
+     xmlns:owl="http://www.w3.org/2002/07/owl#"
+     xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+     xmlns:oboInOwl="http://www.geneontology.org/formats/oboInOwl#">
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/EMPTY_0000001">
+        <obo:IAO_0000115>A measurement.</obo:IAO_0000115>
+        <rdfs:label xml:lang="en">measurement</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/EMPTY_0000002">
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/EMPTY_0000001"/>
+        <obo:IAO_0000115>An organism&apos;s
+            behaviour.</obo:IAO_0000115>
+        <oboInOwl:hasExactSynonym>behaviour measurement</oboInOwl:hasExactSynonym>
+        <oboInOwl:hasRelatedSynonym xml:lang="en">conduct &amp; reaction</oboInOwl:hasRelatedSynonym>
+        <rdfs:label xml:lang="en">behavioral measurement</rdfs:label>
+    </owl:Class>
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/EMPTY_0000006">
+        <rdfs:label xml:lang="en">elevated plus maze: open arm (north) - entries</rdfs:label>
+    </owl:Class>
+</rdf:RDF>
+"""
+
+    # The same terms in OWL functional syntax, as empty-edit.owl is written.
+    FUNCTIONAL = """Prefix(obo:=<http://purl.obolibrary.org/obo/>)
+Ontology(<http://purl.obolibrary.org/obo/empty.owl>
+Declaration(Class(obo:EMPTY_0000002))
+Declaration(Class(obo:EMPTY_0000009))
+AnnotationAssertion(obo:IAO_0000115 obo:EMPTY_0000009 "A draft term.")
+AnnotationAssertion(oboInOwl:hasExactSynonym obo:EMPTY_0000009 "draft")
+AnnotationAssertion(oboInOwl:hasRelatedSynonym obo:EMPTY_0000009 "sketch")
+AnnotationAssertion(rdfs:label obo:EMPTY_0000009 "draft measurement")
+AnnotationAssertion(rdfs:label obo:EMPTY_0000002 "behavioral measurement")
+SubClassOf(obo:EMPTY_0000009 obo:EMPTY_0000002)
+)
+"""
 
     def setup_method(self):
         from ndi_ontology import clearCache
@@ -1150,24 +1233,158 @@ class TestEMPTYProvider:
 
     teardown_method = setup_method
 
-    def test_lookup_by_id(self):
+    @staticmethod
+    def _http_404(url):
+        import requests
+
+        response = requests.Response()
+        response.status_code = 404
+        response.url = url
+        return requests.HTTPError(f"404 Client Error: Not Found for url: {url}", response=response)
+
+    def _serve(self, main, dev=None):
+        """A fake download: each value is a body to return or an exception to raise."""
         from ndi_ontology.providers import EMPTYProvider
 
-        provider = EMPTYProvider()
-        with patch.object(provider, "_http_get_json", return_value=self.GRAPH):
-            result = provider.lookup_term("0000074")
-        assert result.id == "EMPTY:0000074"
-        assert result.name == "Optogenetic Tetanus Stimulation Target Location"
-        assert result.definition == "Where the light goes."
+        def fake_get(url, timeout=30):
+            body = {EMPTYProvider.OWL_URL_MAIN: main, EMPTYProvider.OWL_URL_DEV: dev}[url]
+            if body is None:
+                raise self._http_404(url)
+            if isinstance(body, Exception):
+                raise body
+            return body
 
-    def test_not_found_is_empty(self):
+        return patch.object(EMPTYProvider, "_http_get_text", side_effect=fake_get)
+
+    def test_reads_the_owl_files_matlab_reads(self):
+        """EMPTY.m:8-9 -- empty-base.owl on main, empty-edit.owl on development."""
         from ndi_ontology.providers import EMPTYProvider
 
-        provider = EMPTYProvider()
-        with patch.object(provider, "_http_get_json", return_value=self.GRAPH):
-            result = provider.lookup_term("anything")
-        assert result.prefix == "EMPTY"
-        assert not result.id
+        base = "https://raw.githubusercontent.com/Waltham-Data-Science/empty-ontology/"
+        assert EMPTYProvider.OWL_URL_MAIN == base + "main/empty-base.owl"
+        assert EMPTYProvider.OWL_URL_DEV == base + "development/src/ontology/empty-edit.owl"
+
+    def test_xml_lookup_by_id(self):
+        from ndi_ontology.providers import EMPTYProvider
+
+        with self._serve(self.XML) as mock_get:
+            result = EMPTYProvider().lookup_term("0000002")
+        mock_get.assert_called_once_with(EMPTYProvider.OWL_URL_MAIN, timeout=30)
+        assert result.id == "EMPTY:0000002"
+        assert result.name == "behavioral measurement"
+        # unescapeXML: entities decoded, then trimmed (EMPTY.m:193-203).
+        assert result.definition == "An organism's\n            behaviour."
+        assert result.synonyms == ["behaviour measurement", "conduct & reaction"]
+
+    def test_xml_lookup_by_name_is_case_insensitive(self):
+        from ndi_ontology.providers import EMPTYProvider
+
+        with self._serve(self.XML):
+            result = EMPTYProvider().lookup_term("Behavioral Measurement")
+        assert result.id == "EMPTY:0000002"
+        assert result.name == "behavioral measurement"
+
+    def test_xml_name_with_punctuation(self):
+        from ndi_ontology.providers import EMPTYProvider
+
+        with self._serve(self.XML):
+            result = EMPTYProvider().lookup_term("Elevated Plus Maze: open arm (north) - entries")
+        assert result.id == "EMPTY:0000006"
+        assert result.definition == ""
+        assert result.synonyms == []
+
+    @pytest.mark.parametrize(
+        "term",
+        [
+            "behavioral",  # a label substring: EMPTY.m matches whole labels only
+            "2",  # an unpadded id: EMPTY.m compares the digits as written
+            "EMPTY_0000002",  # the OBO form: EMPTY.m compares the bare digits
+            "0000000",
+        ],
+    )
+    def test_matches_only_exact_id_or_label(self, term):
+        """EMPTY.m:89 and :160 -- strcmpi(thisId, fragment) || strcmpi(thisName, fragment)."""
+        from ndi_ontology.providers import EMPTYProvider
+
+        with self._serve(self.XML, dev=None):
+            result = EMPTYProvider().lookup_term(term)
+        assert not result
+
+    def test_functional_syntax_lookup_by_id(self):
+        """Content with no XML declaration goes to parseFunctionalFormat (EMPTY.m:62-70)."""
+        from ndi_ontology.providers import EMPTYProvider
+
+        with self._serve(self.FUNCTIONAL):
+            result = EMPTYProvider().lookup_term("0000009")
+        assert result.id == "EMPTY:0000009"
+        assert result.name == "draft measurement"
+        assert result.definition == "A draft term."
+        assert result.synonyms == ["draft", "sketch"]
+
+    def test_functional_syntax_lookup_by_name(self):
+        from ndi_ontology.providers import EMPTYProvider
+
+        with self._serve(self.FUNCTIONAL):
+            result = EMPTYProvider().lookup_term("BEHAVIORAL MEASUREMENT")
+        assert result.id == "EMPTY:0000002"
+        assert result.name == "behavioral measurement"
+
+    def test_falls_back_to_development_when_main_lacks_the_term(self):
+        """EMPTY.m:28-33 -- a term only on development is found there."""
+        from ndi_ontology import lookup
+        from ndi_ontology.providers import EMPTYProvider
+
+        with self._serve(self.XML, dev=self.FUNCTIONAL) as mock_get:
+            result = lookup("EMPTY:draft measurement")
+        assert result.id == "EMPTY:0000009"
+        assert [c.args[0] for c in mock_get.call_args_list] == [
+            EMPTYProvider.OWL_URL_MAIN,
+            EMPTYProvider.OWL_URL_DEV,
+        ]
+
+    def test_falls_back_to_development_when_main_fails(self):
+        import requests
+
+        from ndi_ontology import lookup
+
+        with self._serve(requests.Timeout("timed out"), dev=self.FUNCTIONAL):
+            assert lookup("EMPTY:0000009").name == "draft measurement"
+
+    def test_not_found_with_no_development_branch(self):
+        """EMPTY.m:39-43 -- dev 404s, so main's TermNotFound is what surfaces."""
+        from ndi_ontology import NDIOntologyLookupError, lookup
+
+        with self._serve(self.XML, dev=None):
+            with pytest.raises(NDIOntologyLookupError, match="not found in ontology EMPTY"):
+                lookup("EMPTY:NoSuchTermHere")
+
+    def test_main_failure_surfaces_when_development_404s(self):
+        """EMPTY.m:41 -- throw(mainError): the main branch's error, not the 404."""
+        import requests
+
+        from ndi_ontology import NDIOntologyLookupError, lookup
+
+        with self._serve(requests.Timeout("timed out"), dev=None):
+            with pytest.raises(NDIOntologyLookupError, match="timed out") as excinfo:
+                lookup("EMPTY:0000002")
+        assert isinstance(excinfo.value.__cause__, requests.Timeout)
+
+    def test_failure_on_both_branches_names_both(self):
+        """EMPTY.m:46-51 -- a non-404 failure on development combines both errors."""
+        import requests
+
+        from ndi_ontology import NDIOntologyLookupError, lookup
+        from ndi_ontology.providers import EMPTYProvider
+
+        with self._serve(requests.Timeout("main timed out"), dev=self.FUNCTIONAL):
+            with pytest.raises(
+                NDIOntologyLookupError, match="both MAIN and DEVELOPMENT"
+            ) as excinfo:
+                lookup("EMPTY:NoSuchTermHere")
+        cause = excinfo.value.__cause__
+        assert isinstance(cause, EMPTYProvider.LookupFailed)
+        assert isinstance(cause.main_error, requests.Timeout)
+        assert isinstance(cause.dev_error, EMPTYProvider.TermNotFound)
 
     def test_failed_download_raises_and_is_not_cached(self):
         """One timeout must not become a permanent "not found"."""
@@ -1176,29 +1393,27 @@ class TestEMPTYProvider:
         from ndi_ontology import NDIOntologyLookupError, lookup
         from ndi_ontology.providers import EMPTYProvider
 
-        with patch.object(
-            EMPTYProvider, "_http_get_json", side_effect=requests.Timeout("timed out")
-        ):
-            with pytest.raises(NDIOntologyLookupError, match="timed out") as excinfo:
-                lookup("EMPTY:0000074")
-        assert isinstance(excinfo.value.__cause__, requests.Timeout)
-        assert EMPTYProvider._cache is None
+        with self._serve(requests.Timeout("timed out"), dev=None):
+            with pytest.raises(NDIOntologyLookupError, match="timed out"):
+                lookup("EMPTY:0000002")
+        assert not EMPTYProvider._cache
 
         # The next lookup downloads again and succeeds, with no clearCache().
-        with patch.object(EMPTYProvider, "_http_get_json", return_value=self.GRAPH):
-            assert lookup("EMPTY:0000074").id == "EMPTY:0000074"
+        with self._serve(self.XML):
+            assert lookup("EMPTY:0000002").id == "EMPTY:0000002"
 
     def test_download_is_cached_until_clearCache(self):
         from ndi_ontology import clearCache
         from ndi_ontology.providers import EMPTYProvider
 
         provider = EMPTYProvider()
-        with patch.object(EMPTYProvider, "_http_get_json", return_value=self.GRAPH) as mock_get:
-            provider.lookup_term("0000074")
-            provider.lookup_term("0000074")
+        with self._serve(self.XML) as mock_get:
+            provider.lookup_term("0000002")
+            provider.lookup_term("0000001")
             assert mock_get.call_count == 1
             clearCache()
-            provider.lookup_term("0000074")
+            assert EMPTYProvider._cache is None
+            provider.lookup_term("0000002")
             assert mock_get.call_count == 2
 
 

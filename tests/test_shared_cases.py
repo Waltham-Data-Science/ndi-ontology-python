@@ -269,7 +269,9 @@ def test_case_table_covers_every_ported_provider() -> None:
     # WormBase left it when ndi-ontology-matlab added its strain cases (9d8fc03).
     # MICRO, MCO, OBI, ZECO, WBls, OWLTime and CREDIT arrived with their cases
     # (ndi-ontology-matlab 1e48638..2349314), so they never joined it.
-    known_gaps = {"SNOMED", "EFO", "NCIT"}
+    # SNOMED, EFO and NCIT left it when ndi-ontology-matlab added their cases
+    # (36d7814), which leaves it empty.
+    known_gaps: set[str] = set()
     unexpected = set(uncovered) - known_gaps
     assert not unexpected, (
         f"ported providers with no case in ndi-ontology-matlab's table: " f"{sorted(unexpected)}"

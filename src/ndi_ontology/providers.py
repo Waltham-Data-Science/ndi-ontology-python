@@ -1124,25 +1124,56 @@ class EMPTYProvider(OntologyProvider):
 
     MATLAB equivalent: +ndi/+ontology/EMPTY.m
 
-    Fetches the EMPTY ontology as JSON from the Waltham-Data-Science
-    GitHub repository and caches it in memory. Supports lookup by
-    numeric ID (e.g. ``"0000074"``), full OBO-style ID
-    (e.g. ``"EMPTY_0000074"``), or label substring
-    (e.g. ``"Optogenetic Tetanus Stimulation Target Location"``).
+    Reads the ontology's OWL file from the Waltham-Data-Science/empty-ontology
+    GitHub repository: ``empty-base.owl`` on the main branch, falling back to
+    the development branch's ``src/ontology/empty-edit.owl`` when the main
+    lookup fails. Either file may be RDF/XML or OWL functional syntax; the
+    format is detected from the content, as EMPTY.m does.
+
+    A term matches on its bare numeric id (``"0000074"``) or its whole label
+    (``"Optogenetic Tetanus Stimulation Target Location"``), both compared
+    case-insensitively and exactly as written: no zero padding, no
+    ``EMPTY_`` form, no substring match. The first match in the file wins.
     """
 
     name = "EMPTY"
 
-    _JSON_URL = (
+    ONTOLOGY_PREFIX = "EMPTY"
+    OWL_URL_MAIN = (
         "https://raw.githubusercontent.com/Waltham-Data-Science/empty-ontology"
-        "/main/empty-base.json"
+        "/main/empty-base.owl"
+    )
+    OWL_URL_DEV = (
+        "https://raw.githubusercontent.com/Waltham-Data-Science/empty-ontology"
+        "/development/src/ontology/empty-edit.owl"
     )
 
-    # Class-level cache shared across instances
-    _cache: dict[str, Any] | None = None
+    class TermNotFound(LookupError):
+        """The file was read and holds no matching term (MATLAB 'TermNotFound')."""
 
-    def _load_ontology(self) -> dict[str, Any]:
-        """Fetch and parse empty-base.json, caching in class variable.
+    class LookupFailed(LookupError):
+        """Both branches failed (MATLAB 'ndi:ontology:EMPTY:LookupFailed')."""
+
+        def __init__(self, message: str, main_error: Exception, dev_error: Exception):
+            super().__init__(message)
+            self.main_error = main_error
+            self.dev_error = dev_error
+
+    # Downloaded file contents by URL, shared across instances.
+    _cache: dict[str, str] | None = None
+
+    @staticmethod
+    def _http_get_text(url: str, timeout: int = 30) -> str:
+        """HTTP GET returning the body as text; raises on an HTTP error."""
+        import requests
+
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        return resp.text
+
+    @classmethod
+    def _fetchOWL(cls, url: str) -> str:
+        """Download *url*, caching the body in a class variable.
 
         A failed download raises and caches nothing, so the next lookup tries
         again; lookup() turns the raise into NDIOntologyLookupError with the
@@ -1154,100 +1185,152 @@ class EMPTYProvider(OntologyProvider):
         every lookup; the cache here is a deliberate difference, kept because
         a failure can no longer be what it holds. clearCache() resets it.
         """
-        if EMPTYProvider._cache is not None:
-            return EMPTYProvider._cache
+        if cls._cache is not None and url in cls._cache:
+            return cls._cache[url]
+        content = cls._http_get_text(url, timeout=30)
+        if cls._cache is None:
+            cls._cache = {}
+        cls._cache[url] = content
+        return content
 
-        data = self._http_get_json(self._JSON_URL, timeout=30)
+    @staticmethod
+    def _is404(exc: Exception) -> bool:
+        """True for an HTTP 404, which GitHub raw serves for a missing branch.
 
-        # The JSON has a single graph with nodes and edges
-        graphs = data.get("graphs", [])
-        graph = graphs[0] if graphs else {}
+        EMPTY.m:39 sniffs the message for '404' or 'Not Found'. This checks the
+        status code instead, so a term whose text contains '404' is not taken
+        for a missing branch; either way the lookup raises.
+        """
+        response = getattr(exc, "response", None)
+        return getattr(response, "status_code", None) == 404
 
-        # Build lookup indices
-        nodes = graph.get("nodes", [])
-        by_id: dict[str, dict] = {}
-        by_label: dict[str, dict] = {}
-        for node in nodes:
-            node_id = node.get("id", "")
-            label = node.get("lbl", "")
-            # Extract the EMPTY_NNNNNNN suffix from the IRI
-            obo_id = ""
-            if "EMPTY_" in node_id:
-                obo_id = node_id.rsplit("/", 1)[-1]  # e.g. EMPTY_0000074
-            by_id[obo_id] = node
-            if label:
-                by_label[label.lower()] = node
+    @pydantic.validate_call
+    def lookupTermOrID(self, term_or_id_or_name_fragment: str) -> tuple[str, str, str, list[str]]:
+        """Search main, then development (EMPTY.m:17-53).
 
-        EMPTYProvider._cache = {
-            "nodes": nodes,
-            "by_id": by_id,
-            "by_label": by_label,
-        }
-        return EMPTYProvider._cache
+        Returns ``(id, name, definition, synonyms)``. Raises the main branch's
+        error if the development file is missing (404), TermNotFound included,
+        and LookupFailed carrying both errors if development fails otherwise.
+        """
+        try:
+            return self.performRemoteLookup(self.OWL_URL_MAIN, term_or_id_or_name_fragment)
+        except Exception as exc:
+            main_error = exc
+
+        try:
+            return self.performRemoteLookup(self.OWL_URL_DEV, term_or_id_or_name_fragment)
+        except Exception as dev_error:
+            if self._is404(dev_error):
+                # Re-raise main's error with its own cause intact.
+                raise main_error from main_error.__cause__
+            raise self.LookupFailed(
+                f'EMPTY lookup failed for "{term_or_id_or_name_fragment}" in both MAIN '
+                f"and DEVELOPMENT branches (main: {main_error}; development: {dev_error}).",
+                main_error,
+                dev_error,
+            ) from dev_error
+
+    def performRemoteLookup(
+        self, url: str, term_or_id_or_name_fragment: str
+    ) -> tuple[str, str, str, list[str]]:
+        """Fetch one OWL file and parse it in whichever format it is (EMPTY.m:57-71)."""
+        owl_content = self._fetchOWL(url)
+        if "<?xml" in owl_content or "<rdf:RDF" in owl_content:
+            return self.parseXMLFormat(owl_content, term_or_id_or_name_fragment)
+        return self.parseFunctionalFormat(owl_content, term_or_id_or_name_fragment)
+
+    def parseFunctionalFormat(self, content: str, fragment: str) -> tuple[str, str, str, list[str]]:
+        """Regex parser for OWL functional syntax (EMPTY.m:73-122).
+
+        Candidate ids are every distinct ``EMPTY_<digits>`` in the file, tried
+        in sorted order (MATLAB's unique() sorts). Values are not unescaped.
+        """
+        for this_id in sorted(set(re.findall(r"EMPTY_(\d+)", content))):
+            label_match = re.search(
+                rf'AnnotationAssertion\(rdfs:label obo:EMPTY_{this_id} "([^"]+)"', content
+            )
+            this_name = label_match.group(1) if label_match else ""
+
+            if this_id.lower() == fragment.lower() or this_name.lower() == fragment.lower():
+                def_match = re.search(
+                    rf'AnnotationAssertion\(obo:IAO_0000115 obo:EMPTY_{this_id} "([^"]+)"',
+                    content,
+                )
+                synonyms = re.findall(
+                    r"AnnotationAssertion\(oboInOwl:has(?:Exact|Related)Synonym "
+                    rf'obo:EMPTY_{this_id} "([^"]+)"',
+                    content,
+                )
+                return (
+                    f"{self.ONTOLOGY_PREFIX}:{this_id}",
+                    this_name,
+                    def_match.group(1) if def_match else "",
+                    synonyms,
+                )
+        raise self.TermNotFound("Not found in functional text.")
+
+    def parseXMLFormat(self, xml_string: str, fragment: str) -> tuple[str, str, str, list[str]]:
+        """Regex parser for OWL RDF/XML (EMPTY.m:124-176).
+
+        Class blocks are tried in document order; a block whose IRI carries no
+        ``EMPTY_<digits>`` is skipped. The first label, first definition and
+        every exact or related synonym are taken, each through unescapeXML.
+        """
+        class_blocks = re.findall(
+            r"""(?s)<owl:Class\s+rdf:about=["']([^"']*)["']>(.*?)</owl:Class>""", xml_string
+        )
+        for about_url, content in class_blocks:
+            id_match = re.search(r"EMPTY_(\d+)", about_url)
+            if not id_match:
+                continue
+            this_id = id_match.group(1)
+
+            label_match = re.search(r"(?s)<rdfs:label[^>]*>(.*?)</rdfs:label>", content)
+            this_name = self.unescapeXML(label_match.group(1)) if label_match else ""
+
+            if this_id.lower() == fragment.lower() or this_name.lower() == fragment.lower():
+                def_match = re.search(r"(?s)<obo:IAO_0000115[^>]*>(.*?)</obo:IAO_0000115>", content)
+                synonyms = re.findall(
+                    r"(?s)<oboInOwl:has(?:Exact|Related)Synonym[^>]*>(.*?)"
+                    r"</oboInOwl:has(?:Exact|Related)Synonym>",
+                    content,
+                )
+                return (
+                    f"{self.ONTOLOGY_PREFIX}:{this_id}",
+                    this_name,
+                    self.unescapeXML(def_match.group(1)) if def_match else "",
+                    [self.unescapeXML(s) for s in synonyms],
+                )
+        raise self.TermNotFound(f'Term "{fragment}" not found in XML format.')
+
+    @staticmethod
+    def unescapeXML(text: str) -> str:
+        """EMPTY.m:178-188, in its order: '&amp;' is decoded before '&lt;' and
+        '&gt;', any tag left over is stripped, and the result is trimmed.
+
+        Kept separate from the module's _unescape_xml, which decodes '&amp;'
+        last and strips nothing, because the two give different answers for
+        '&amp;lt;' and for escaped markup.
+        """
+        text = (
+            text.replace("&apos;", "'")
+            .replace("&quot;", '"')
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+        )
+        return re.sub(r"<[^>]*>", "", text).strip()
 
     @pydantic.validate_call
     def lookup_term(self, term: str, prefix: str = "") -> Any:
         from . import OntologyResult
-        from .name_utils import name_to_variable_name
 
-        cache = self._load_ontology()
-        by_id = cache.get("by_id", {})
-        by_label = cache.get("by_label", {})
-
-        node = None
-
-        # Try numeric ID: "0000074" -> "EMPTY_0000074"
-        if re.match(r"^\d+$", term):
-            obo_key = f"EMPTY_{term.zfill(7)}"
-            node = by_id.get(obo_key)
-        # Try full OBO ID: "EMPTY_0000074"
-        elif term.startswith("EMPTY_"):
-            node = by_id.get(term)
-        # Try exact label match (case-insensitive)
-        if node is None:
-            node = by_label.get(term.lower())
-        # Try substring match on labels
-        if node is None:
-            term_lower = term.lower()
-            for label, n in by_label.items():
-                if term_lower in label:
-                    node = n
-                    break
-
-        if node is None:
+        try:
+            term_id, name, definition, synonyms = self.lookupTermOrID(term)
+        except self.TermNotFound:
+            # "Not found" is an empty result here; lookup() makes it the raise.
             return OntologyResult(prefix="EMPTY")
-
-        label = node.get("lbl", "")
-        node_id = node.get("id", "")
-        # Build EMPTY:NNNNNNN style ID
-        obo_id = ""
-        if "EMPTY_" in node_id:
-            suffix = node_id.rsplit("/", 1)[-1]  # EMPTY_0000074
-            obo_id = suffix.replace("_", ":", 1)  # EMPTY:0000074
-
-        # Extract definition
-        meta = node.get("meta", {})
-        definition = ""
-        if isinstance(meta, dict):
-            defn = meta.get("definition", {})
-            if isinstance(defn, dict):
-                definition = defn.get("val", "")
-
-        # Extract synonyms
-        synonyms = []
-        if isinstance(meta, dict):
-            for syn in meta.get("synonyms", []):
-                if isinstance(syn, dict):
-                    synonyms.append(syn.get("val", ""))
-
-        return OntologyResult(
-            id=obo_id,
-            name=label,
-            prefix="EMPTY",
-            definition=definition,
-            synonyms=synonyms,
-            short_name=name_to_variable_name(label),
-        )
+        return OntologyResult(id=term_id, name=name, definition=definition, synonyms=synonyms)
 
 
 # ---------------------------------------------------------------------------
@@ -1277,6 +1360,18 @@ class NCITProvider(OLSProvider):
     name = "NCIT"
     ols_ontology = "ncit"
     ols_prefix = "NCIT"
+
+    @pydantic.validate_call
+    def lookup_term(self, term: str, prefix: str = "") -> Any:
+        # NCIT.m runs preprocessLookupInput and then, whatever search field it
+        # chose, always searches obo_id for ['NCIT:', search_query]. So a code
+        # (C3262) resolves and a name does not; a numeric id, already
+        # 'NCIT:<digits>' from preprocessing, is prefixed again, as MATLAB
+        # sends it.
+        search_query, _, lookup_type_msg = OLSProvider.preprocessLookupInput(term, self.ols_prefix)
+        return self.searchOLSAndPerformIRILookup(
+            f"NCIT:{search_query}", "obo_id", self.ols_ontology, self.ols_prefix, lookup_type_msg
+        )
 
 
 class STATOProvider(OLSProvider):

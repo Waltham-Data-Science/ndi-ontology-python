@@ -225,8 +225,9 @@ def lookup(lookup_string: str) -> OntologyResult:
             f"{lookup_string!r} has no ontology prefix; expected 'PREFIX:term'"
         )
 
-    # MATLAB's getOntologyNameFromPrefix trims both sides of the first colon
-    # (ontology.m:491), so ' CL : 0000540 ' is CL:0000540.
+    # MATLAB trims both halves before mapping the prefix or calling the
+    # provider (getOntologyNameFromPrefix, ontology.m:493), so ' CL : neuron'
+    # resolves there. The cache stays keyed on the string as typed, as MATLAB's is.
     prefix, remainder = (part.strip() for part in lookup_string.split(":", 1))
 
     prefix_map = _load_prefix_map()
