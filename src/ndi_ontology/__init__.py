@@ -225,7 +225,10 @@ def lookup(lookup_string: str) -> OntologyResult:
             f"{lookup_string!r} has no ontology prefix; expected 'PREFIX:term'"
         )
 
-    prefix, remainder = lookup_string.split(":", 1)
+    # MATLAB trims both halves before mapping the prefix or calling the
+    # provider (getOntologyNameFromPrefix, ontology.m:493), so ' CL : neuron'
+    # resolves there. The cache stays keyed on the string as typed, as MATLAB's is.
+    prefix, remainder = (part.strip() for part in lookup_string.split(":", 1))
 
     prefix_map = _load_prefix_map()
 
@@ -274,7 +277,7 @@ def lookup(lookup_string: str) -> OntologyResult:
     # NDI's subject tables name treatment columns with it, so a provider
     # returning OLS's short_form or '' gave Python different columns from
     # MATLAB for the same dataset.
-    result.prefix = prefix.strip()
+    result.prefix = prefix
     result.synonyms = [
         s
         for item in result.synonyms

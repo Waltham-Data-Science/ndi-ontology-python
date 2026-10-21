@@ -179,6 +179,14 @@ classes:
           'taxonomy:9606'). NDI-python names treatment columns in its subject
           tables from shortName, so the same dataset got different columns
           in each language. The shared-case runner now asserts both fields.
+          FIXED 2026-10-21: lookup() now trims the prefix and the remainder
+          before mapping the prefix and calling the provider, as
+          getOntologyNameFromPrefix does (ontology.m:493, read at 44efcec).
+          Python used to match the untrimmed prefix and pass the untrimmed
+          remainder, so 'CL: 0000540' and ' CL:0000540' failed in Python and
+          resolved in MATLAB. The cache is still keyed on the string as typed,
+          as MATLAB's is. Python's str.strip() stands in for strtrim; the two
+          differ only on NUL characters, which strtrim also removes.
 
       # --- Instance: lookupTermOrID ---
       - name: lookupTermOrID
